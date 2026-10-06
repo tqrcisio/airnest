@@ -11,6 +11,10 @@ export class DagRegistry {
     this.dags.set(id, dag);
   }
 
+  find(dagId: string) {
+    return this.dags.get(dagId);
+  }
+
   get(dagId: string) {
     const dag = this.dags.get(dagId);
     if (!dag) throw new Error(`DAG ${dagId} is not registered`);

@@ -38,7 +38,13 @@ importers:
       '@airnest/core':
         specifier: workspace:*
         version: link:../core
+      '@airnest/postgres':
+        specifier: workspace:*
+        version: link:../postgres
     devDependencies:
+      '@electric-sql/pglite':
+        specifier: 0.5.8
+        version: 0.5.8
       '@nestjs/common':
         specifier: 12.1.2
         version: 12.1.2(reflect-metadata@0.2.2)(rxjs@7.8.2)

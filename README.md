@@ -39,9 +39,27 @@ export class SalesDailyDag {
   }
 }
 
-@Module({ imports: [AirnestModule], providers: [SalesGateway, Warehouse, SalesDailyDag] })
+@Module({ providers: [SalesGateway, Warehouse, SalesDailyDag] })
 export class SalesModule {}
+
+@Module({
+  imports: [
+    AirnestModule.forRoot({ db: fromPgPool(new pg.Pool({ connectionString: process.env.DATABASE_URL })) }),
+    SalesModule,
+  ],
+})
+export class AppModule {}
 ```
+
+No boot, o módulo aplica as migrações, registra a versão de cada DAG e liga o scheduler e o worker no mesmo processo
+(`scheduler: { enabled: false }` ou `worker: { enabled: false }` separam os papéis entre processos). Disparo manual:
+
+```ts
+await airnest.trigger('sales_daily', { params: { branches: [1, 2] }, triggeredBy: user.email });
+```
+
+No shutdown, o worker espera as tasks em andamento até `shutdownTimeoutMs`; o que passar disso perde o lease e volta
+para a fila pelo reaper de outra réplica.
 
 A classe é descoberta em qualquer módulo. Um nome errado em `after` não compila, e `ctx.output('extract')`
 devolve o tipo de retorno de `extract`. Ler a saída de uma task fora do `after` derruba o boot com o motivo.

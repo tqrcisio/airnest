@@ -1,5 +1,6 @@
 import { Injectable, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { PGlite } from '@electric-sql/pglite';
 import { InvalidDagError } from '@airnest/core';
 import {
   AirnestModule,
@@ -55,7 +56,10 @@ class SalesModule {}
 
 async function boot(...providers: Function[]) {
   const moduleRef = await Test.createTestingModule({
-    imports: [AirnestModule, SalesModule],
+    imports: [
+      AirnestModule.forRoot({ db: new PGlite(), scheduler: { enabled: false }, worker: { enabled: false } }),
+      SalesModule,
+    ],
     providers: providers as never[],
   }).compile();
   await moduleRef.init();

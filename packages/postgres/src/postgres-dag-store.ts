@@ -1,7 +1,9 @@
 import {
   canRetry,
+  nextScheduledRun,
   planRun,
   retryDelayMs,
+  ScheduleStalledError,
   type DagDefinition,
   type DataInterval,
   type RunState,
@@ -36,6 +38,28 @@ export type FinishedRun = { runId: string; dagId: string; state: RunState; reaso
 
 export type AdvanceReport = { queued: number; finished: FinishedRun[] };
 
+export type SchedulingReport = { created: { runId: string; dagId: string; logicalDate: Date }[]; stalled: string[] };
+
+export type TaskSummary = {
+  taskId: string;
+  state: TaskState;
+  tryNumber: number;
+  reason: string | null;
+  lastError: string | null;
+};
+
+export type RunSummary = {
+  runId: string;
+  dagId: string;
+  runType: RunType;
+  state: RunState;
+  logicalDate: Date;
+  failureReason: string | null;
+  triggeredBy: string | null;
+  tasks: TaskSummary[];
+};
+
+type DueDagRow = { dag_id: string; latest_version: string; last_logical_date: Date | null };
 type RunRow = { run_id: string; dag_id: string; dag_version: string; state: RunState };
 type TaskRow = { task_id: string; state: TaskState; retry_at: Date | null };
 type RunningAttemptRow = {
@@ -57,10 +81,10 @@ export class PostgresDagStore {
 
   async registerDag(definition: DagDefinition, version: string, now: Date) {
     await this.db.transaction(async (tx) => {
-      await tx.query(
+      const { rows } = await tx.query<{ last_logical_date: Date | null }>(
         `insert into airnest.dag (dag_id, latest_version, created_at, updated_at) values ($1, $2, $3, $3)
          on conflict (dag_id) do update set latest_version = excluded.latest_version, updated_at = excluded.updated_at
-         where airnest.dag.latest_version <> excluded.latest_version`,
+         returning last_logical_date`,
         [definition.id, version, now],
       );
       await tx.query(
@@ -68,6 +92,11 @@ export class PostgresDagStore {
          on conflict do nothing`,
         [definition.id, version, JSON.stringify(definition), now],
       );
+      const next = nextScheduledRun(definition, rows[0].last_logical_date, now);
+      await tx.query('update airnest.dag set next_run_after = $2 where dag_id = $1', [
+        definition.id,
+        next?.logicalDate ?? null,
+      ]);
     });
   }
 
@@ -78,37 +107,90 @@ export class PostgresDagStore {
         [run.dagId],
       );
       if (dags.length === 0) throw new Error(`DAG ${run.dagId} is not registered`);
-      const version = dags[0].latest_version;
-
-      const { rows: created } = await tx.query<{ run_id: string }>(
-        `insert into airnest.dag_run (dag_id, dag_version, logical_date, data_interval_start, data_interval_end,
-           run_type, state, params, triggered_by, created_at, updated_at)
-         values ($1, $2, $3, $4, $5, $6, 'queued', $7::jsonb, $8, $9, $9)
-         on conflict (dag_id, logical_date) do nothing
-         returning run_id`,
-        [
-          run.dagId,
-          version,
-          run.logicalDate,
-          run.dataInterval.start,
-          run.dataInterval.end,
-          run.runType,
-          JSON.stringify(run.params ?? {}),
-          run.triggeredBy ?? null,
-          now,
-        ],
-      );
-      if (created.length === 0) return null;
-      const runId = created[0].run_id;
-
-      const definition = await this.definition(tx, run.dagId, version);
-      await tx.query(
-        `insert into airnest.task_instance (run_id, task_id, state, created_at, updated_at)
-         select $1, task_id, 'pending', $3, $3 from unnest($2::text[]) as task_id`,
-        [runId, definition.tasks.map((task) => task.id), now],
-      );
-      return runId;
+      return this.insertRun(tx, run, dags[0].latest_version, now);
     });
+  }
+
+  async createDueRuns(now: Date, limit = 50, maxRunsPerDag = 10): Promise<SchedulingReport> {
+    return this.db.transaction(async (tx) => {
+      const { rows: due } = await tx.query<DueDagRow>(
+        `select dag_id, latest_version, last_logical_date from airnest.dag
+         where not is_paused and next_run_after <= $1
+         order by next_run_after limit $2 for update skip locked`,
+        [now, limit],
+      );
+      const report: SchedulingReport = { created: [], stalled: [] };
+      for (const dag of due) {
+        try {
+          await this.createDueRunsOf(tx, dag, now, maxRunsPerDag, report);
+        } catch (error) {
+          if (!(error instanceof ScheduleStalledError)) throw error;
+          await tx.query('update airnest.dag set next_run_after = null where dag_id = $1', [dag.dag_id]);
+          report.stalled.push(dag.dag_id);
+        }
+      }
+      return report;
+    });
+  }
+
+  private async createDueRunsOf(tx: Queryable, dag: DueDagRow, now: Date, maxRuns: number, report: SchedulingReport) {
+    const definition = await this.definition(tx, dag.dag_id, dag.latest_version);
+    const { rows: active } = await tx.query<{ count: number }>(
+      `select count(*)::int as count from airnest.dag_run where dag_id = $1 and state in ('queued', 'running')`,
+      [dag.dag_id],
+    );
+    let slots = Math.min(maxRuns, definition.maxActiveRuns - active[0].count);
+    let last = dag.last_logical_date;
+    let next = nextScheduledRun(definition, last, now);
+
+    while (slots > 0 && next && next.logicalDate <= now) {
+      const runId = await this.insertRun(
+        tx,
+        { dagId: dag.dag_id, logicalDate: next.logicalDate, dataInterval: next.dataInterval, runType: 'scheduled' },
+        dag.latest_version,
+        now,
+      );
+      if (runId) report.created.push({ runId, dagId: dag.dag_id, logicalDate: next.logicalDate });
+      last = next.logicalDate;
+      next = nextScheduledRun(definition, last, now);
+      slots--;
+    }
+
+    await tx.query(
+      'update airnest.dag set last_logical_date = $2, next_run_after = $3, updated_at = $4 where dag_id = $1',
+      [dag.dag_id, last, slots > 0 ? (next?.logicalDate ?? null) : now, now],
+    );
+  }
+
+  private async insertRun(tx: Queryable, run: NewRun, version: string, now: Date) {
+    const { rows: created } = await tx.query<{ run_id: string }>(
+      `insert into airnest.dag_run (dag_id, dag_version, logical_date, data_interval_start, data_interval_end,
+         run_type, state, params, triggered_by, created_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6, 'queued', $7::jsonb, $8, $9, $9)
+       on conflict (dag_id, logical_date) do nothing
+       returning run_id`,
+      [
+        run.dagId,
+        version,
+        run.logicalDate,
+        run.dataInterval.start,
+        run.dataInterval.end,
+        run.runType,
+        JSON.stringify(run.params ?? {}),
+        run.triggeredBy ?? null,
+        now,
+      ],
+    );
+    if (created.length === 0) return null;
+    const runId = created[0].run_id;
+
+    const definition = await this.definition(tx, run.dagId, version);
+    await tx.query(
+      `insert into airnest.task_instance (run_id, task_id, state, created_at, updated_at)
+       select $1, task_id, 'pending', $3, $3 from unnest($2::text[]) as task_id`,
+      [runId, definition.tasks.map((task) => task.id), now],
+    );
+    return runId;
   }
 
   async advanceRuns(now: Date, limit = 50): Promise<AdvanceReport> {
@@ -327,6 +409,55 @@ export class PostgresDagStore {
       [runId, taskIds],
     );
     return Object.fromEntries(rows.map((row) => [row.task_id, row.value]));
+  }
+
+  async runs(dagId: string, limit = 25): Promise<RunSummary[]> {
+    const { rows: runs } = await this.db.query<{
+      run_id: string;
+      dag_id: string;
+      run_type: RunType;
+      state: RunState;
+      logical_date: Date;
+      failure_reason: string | null;
+      triggered_by: string | null;
+    }>(
+      `select run_id, dag_id, run_type, state, logical_date, failure_reason, triggered_by from airnest.dag_run
+       where dag_id = $1 order by logical_date desc limit $2`,
+      [dagId, limit],
+    );
+    if (runs.length === 0) return [];
+
+    const { rows: tasks } = await this.db.query<{
+      run_id: string;
+      task_id: string;
+      state: TaskState;
+      try_number: number;
+      reason: string | null;
+      last_error: string | null;
+    }>(
+      `select run_id, task_id, state, try_number, reason, last_error from airnest.task_instance
+       where run_id = any($1::uuid[]) order by created_at, task_id`,
+      [runs.map((run) => run.run_id)],
+    );
+
+    return runs.map((run) => ({
+      runId: run.run_id,
+      dagId: run.dag_id,
+      runType: run.run_type,
+      state: run.state,
+      logicalDate: run.logical_date,
+      failureReason: run.failure_reason,
+      triggeredBy: run.triggered_by,
+      tasks: tasks
+        .filter((task) => task.run_id === run.run_id)
+        .map((task) => ({
+          taskId: task.task_id,
+          state: task.state,
+          tryNumber: task.try_number,
+          reason: task.reason,
+          lastError: task.last_error,
+        })),
+    }));
   }
 
   private async recordAttempt(
