@@ -1,0 +1,23 @@
+{
+  "name": "@airnest/demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js",
+    "dev": "pnpm build && node dist/main.js"
+  },
+  "dependencies": {
+    "@airnest/control-plane": "workspace:*",
+    "@airnest/nestjs": "workspace:*",
+    "@airnest/postgres": "workspace:*",
+    "@electric-sql/pglite": "0.5.8",
+    "@nestjs/common": "12.1.2",
+    "@nestjs/core": "12.1.2",
+    "@nestjs/platform-express": "12.1.2",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  }
+}

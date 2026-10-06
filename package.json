@@ -10,9 +10,9 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "lint": "oxlint packages/",
-    "format": "prettier --write \"packages/**/*.ts\"",
-    "format:check": "prettier --check \"packages/**/*.ts\""
+    "lint": "oxlint packages/ apps/",
+    "format": "prettier --write \"{packages,apps}/**/*.{ts,tsx}\"",
+    "format:check": "prettier --check \"{packages,apps}/**/*.{ts,tsx}\""
   },
   "devDependencies": {
     "@types/node": "24.19.1",

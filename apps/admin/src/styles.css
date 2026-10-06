@@ -1,0 +1,29 @@
+@import "@airnest/ui/globals.css";
+@import "@xyflow/react/dist/style.css";
+@import "@fontsource-variable/jetbrains-mono";
+
+@source "./**/*.{ts,tsx}";
+
+@theme {
+  --font-mono: "JetBrains Mono Variable", ui-monospace, Menlo, Consolas, monospace;
+}
+
+:root {
+  --primary: oklch(0.6 0.22 18);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.6 0.22 18 / 60%);
+  --sidebar-primary: oklch(0.6 0.22 18);
+}
+
+.dark {
+  --primary: oklch(0.65 0.21 15);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.65 0.21 15 / 60%);
+  --sidebar-primary: oklch(0.65 0.21 15);
+}
+
+.react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  --xy-edge-stroke-width: 1.5;
+}

@@ -13,6 +13,18 @@ React gerado a partir da definição das DAGs.
 | `@airnest/nestjs` | DAGs declaradas como providers do Nest, com `@Dag` e `@Task`                                                      |
 | `@airnest/core`   | motor sem framework: validação do grafo, trigger rules, planejamento de run, retry e agenda por cron com timezone |
 
+## Apps
+
+| App          | O que é                                                                                                                                                                                                                     |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/admin` | Admin em React (Vite, TanStack Router/Query/Table, shadcn): lista de DAGs, grade de runs × tasks, grafo com estado ao vivo, tentativas e disparo com formulário gerado pelos params. Lê tudo do manifesto do control plane. |
+| `apps/demo`  | Backend Nest com três DAGs de exemplo, PGlite e o control plane em `/airnest`, para desenvolver o admin.                                                                                                                    |
+
+```bash
+pnpm --filter @airnest/demo dev     # http://localhost:3100/airnest
+pnpm --filter @airnest/admin dev    # http://localhost:4300
+```
+
 ## Exemplo
 
 ```ts
