@@ -53,7 +53,7 @@ class SlowDag {
 @Module({ providers: [Ledger, InvoicesDag, SlowDag] })
 class BillingModule {}
 
-const fast: Partial<AirnestModuleOptions> = { scheduler: { pollMs: 10 }, worker: { pollMs: 10, leaseMs: 1000 } };
+const fast: Partial<AirnestModuleOptions> = { scheduler: { pollMs: 10 }, worker: { pollMs: 10, leaseMs: 10_000 } };
 
 async function boot(options: Partial<AirnestModuleOptions> = {}) {
   const moduleRef = await Test.createTestingModule({
@@ -132,8 +132,9 @@ describe('Airnest runtime', () => {
   it('waits for running tasks before the application shuts down', async () => {
     const db = new PGlite();
     app = await boot({ db, shutdownTimeoutMs: 5000 });
-    await app.get(Airnest).trigger('slow');
-    await sleep(20);
+    const airnest = app.get(Airnest);
+    await airnest.trigger('slow');
+    while ((await airnest.runs('slow'))[0].tasks[0].state !== 'running') await sleep(5);
     await app.close();
     app = undefined as never;
 
