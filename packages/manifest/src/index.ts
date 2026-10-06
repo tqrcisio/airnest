@@ -14,13 +14,13 @@ export type FieldManifest = {
   relation?: EntitySlug;
 };
 
-export type EntitySlug = 'dags' | 'runs' | 'task-instances' | 'attempts';
+export type EntitySlug = 'dags' | 'runs' | 'task-instances' | 'attempts' | 'pools';
 
 export type ActionManifest = {
-  name: 'trigger' | 'pause' | 'unpause';
+  name: 'trigger' | 'pause' | 'unpause' | 'backfill' | 'clear-failed' | 'clear-all' | 'clear';
   label: string;
   scope: 'row' | 'detail';
-  input?: 'dag-params';
+  input?: 'dag-params' | 'date-range';
   confirm?: string;
 };
 

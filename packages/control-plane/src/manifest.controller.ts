@@ -13,3 +13,14 @@ export class ManifestController {
     return buildManifest(await this.store.dags());
   }
 }
+
+@Controller('pools')
+@UseGuards(ControlPlaneGuard)
+export class PoolsController {
+  constructor(private readonly store: PostgresDagStore) {}
+
+  @Get()
+  list() {
+    return this.store.pools();
+  }
+}

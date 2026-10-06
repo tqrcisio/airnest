@@ -7,11 +7,11 @@ import {
   type ControlPlaneOptions,
 } from './control-plane.module-definition.js';
 import { DagsController } from './dags.controller.js';
-import { ManifestController } from './manifest.controller.js';
+import { ManifestController, PoolsController } from './manifest.controller.js';
 import { RunsController } from './runs.controller.js';
 
 @Module({
-  controllers: [ManifestController, DagsController, RunsController],
+  controllers: [ManifestController, DagsController, RunsController, PoolsController],
   providers: [
     {
       provide: PostgresDagStore,

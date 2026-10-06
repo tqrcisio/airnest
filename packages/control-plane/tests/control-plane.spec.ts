@@ -52,7 +52,13 @@ describe('control plane', () => {
     const { body } = await booted.http.get('/airnest/manifest').expect(200);
     const manifest = body as Manifest;
 
-    expect(manifest.entities.map((entity) => entity.slug)).toEqual(['dags', 'runs', 'task-instances', 'attempts']);
+    expect(manifest.entities.map((entity) => entity.slug)).toEqual([
+      'dags',
+      'runs',
+      'task-instances',
+      'attempts',
+      'pools',
+    ]);
     expect(manifest.dags).toEqual([
       {
         id: 'sales_daily',
@@ -153,6 +159,79 @@ describe('control plane', () => {
       isPaused: false,
       pausedBy: null,
     });
+  });
+
+  it('rejects params that break the schema with every problem listed', async () => {
+    const booted = await boot();
+    app = booted.app;
+    const { body } = await booted.http
+      .post('/airnest/dags/sales_daily/runs')
+      .send({ params: { branches: 'all' } })
+      .expect(400);
+    expect(body.message).toEqual(['branches must be array']);
+  });
+
+  it('backfills a range and validates it', async () => {
+    const booted = await boot();
+    app = booted.app;
+    const { body } = await booted.http
+      .post('/airnest/dags/sales_daily/backfills')
+      .set('x-user', 'ana@example.com')
+      .send({ from: '2026-10-01T00:00:00Z', to: '2026-10-03T12:00:00Z' })
+      .expect(201);
+    expect([body.created.length, body.skipped]).toEqual([3, 0]);
+
+    const { body: runs } = await booted.http.get('/airnest/dags/sales_daily/runs').expect(200);
+    expect(runs.map((run: { runType: string; triggeredBy: string }) => [run.runType, run.triggeredBy])).toEqual(
+      Array(3).fill(['backfill', 'ana@example.com']),
+    );
+
+    await booted.http
+      .post('/airnest/dags/sales_daily/backfills')
+      .send({ from: '2026-10-03', to: '2026-10-01' })
+      .expect(400);
+    await booted.http.post('/airnest/dags/sales_daily/backfills').send({ from: 'soon' }).expect(400);
+  });
+
+  it('reruns failed tasks of a run and serves the logs of a task', async () => {
+    const booted = await boot();
+    app = booted.app;
+    const { body: run } = await booted.http.post('/airnest/dags/sales_daily/runs').send({}).expect(201);
+
+    await booted.store.advanceRuns(now);
+    const [extract] = await booted.store.claimTasks('worker', now, 60_000);
+    await booted.store.appendLogs([
+      { runId: run.runId, taskId: 'extract', tryNumber: 1, level: 'log', message: 'starting', at: now },
+    ]);
+    await booted.http.post(`/airnest/runs/${run.runId}/clear`).send({}).expect(409);
+    await booted.store.succeed(extract.attemptId, [1], now);
+    await booted.store.advanceRuns(now);
+    const [load] = await booted.store.claimTasks('worker', now, 60_000);
+    await booted.store.fail(load.attemptId, 'boom', now);
+    await booted.store.advanceRuns(now);
+
+    const { body } = await booted.http.post(`/airnest/runs/${run.runId}/clear`).send({ onlyFailed: true }).expect(200);
+    expect(body).toEqual({ cleared: ['load'] });
+    await booted.http
+      .post(`/airnest/runs/${run.runId}/clear`)
+      .send({ taskIds: ['nope'] })
+      .expect(404);
+    await booted.http.post(`/airnest/runs/${run.runId}/clear`).send({ taskIds: 'load' }).expect(400);
+
+    const { body: lines } = await booted.http.get(`/airnest/runs/${run.runId}/tasks/extract/logs`).expect(200);
+    expect(lines.map((line: { message: string }) => line.message)).toEqual(['starting']);
+    const { body: after } = await booted.http.get(
+      `/airnest/runs/${run.runId}/tasks/extract/logs?after=${lines[0].seq}`,
+    );
+    expect(after).toEqual([]);
+  });
+
+  it('lists pools with what is running and queued', async () => {
+    const booted = await boot();
+    app = booted.app;
+    await booted.store.upsertPools({ warehouse: 4 }, now);
+    const { body } = await booted.http.get('/airnest/pools').expect(200);
+    expect(body).toEqual([{ name: 'warehouse', slots: 4, description: null, running: 0, queued: 0 }]);
   });
 
   it('refuses every route when authorize says no', async () => {

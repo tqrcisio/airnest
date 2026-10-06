@@ -15,22 +15,42 @@ import {
   UseGuards,
   DefaultValuePipe,
 } from '@nestjs/common';
+import { InvalidParamsError } from '@airnest/core';
 import { PostgresDagStore } from '@airnest/postgres';
 import { ControlPlaneGuard } from './control-plane.guard.js';
 import { CONTROL_PLANE_OPTIONS, type ControlPlaneOptions } from './control-plane.module-definition.js';
 
 type TriggerBody = { params?: unknown; logicalDate?: unknown };
+type BackfillBody = { from?: unknown; to?: unknown; params?: unknown };
 
 const maxPageSize = 200;
 
-function parseTrigger(body: TriggerBody | undefined, now: Date) {
-  const params = body?.params ?? {};
+function parseParams(params: unknown = {}) {
   if (typeof params !== 'object' || params === null || Array.isArray(params)) {
     throw new BadRequestException('params must be an object');
   }
-  const logicalDate = body?.logicalDate === undefined ? now : new Date(String(body.logicalDate));
-  if (Number.isNaN(logicalDate.getTime())) throw new BadRequestException('logicalDate must be an ISO date');
-  return { params: params as Record<string, unknown>, logicalDate };
+  return params as Record<string, unknown>;
+}
+
+function parseDate(value: unknown, field: string) {
+  const date = new Date(String(value));
+  if (value === undefined || Number.isNaN(date.getTime()))
+    throw new BadRequestException(`${field} must be an ISO date`);
+  return date;
+}
+
+function parseTrigger(body: TriggerBody | undefined, now: Date) {
+  const logicalDate = body?.logicalDate === undefined ? now : parseDate(body.logicalDate, 'logicalDate');
+  return { params: parseParams(body?.params), logicalDate };
+}
+
+async function rejectingInvalidParams<T>(work: Promise<T>) {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof InvalidParamsError) throw new BadRequestException(error.problems);
+    throw error;
+  }
 }
 
 @Controller('dags')
@@ -68,19 +88,46 @@ export class DagsController {
     await this.get(dagId);
     const now = this.clock();
     const { params, logicalDate } = parseTrigger(body, now);
-    const runId = await this.store.createRun(
-      {
-        dagId,
-        logicalDate,
-        dataInterval: { start: logicalDate, end: logicalDate },
-        runType: 'manual',
-        params,
-        triggeredBy: this.options.resolveUser?.(request),
-      },
-      now,
+    const runId = await rejectingInvalidParams(
+      this.store.createRun(
+        {
+          dagId,
+          logicalDate,
+          dataInterval: { start: logicalDate, end: logicalDate },
+          runType: 'manual',
+          params,
+          triggeredBy: this.options.resolveUser?.(request),
+        },
+        now,
+      ),
     );
     if (!runId) throw new ConflictException(`DAG ${dagId} already has a run for ${logicalDate.toISOString()}`);
     return this.store.run(runId);
+  }
+
+  @Post(':dagId/backfills')
+  async backfill(@Param('dagId') dagId: string, @Body() body: BackfillBody | undefined, @Req() request: unknown) {
+    const [dag] = await this.store.dags(dagId);
+    if (!dag) throw new NotFoundException(`DAG ${dagId} is not registered`);
+    if (!dag.definition.schedule) throw new BadRequestException(`DAG ${dagId} has no schedule to backfill`);
+    const from = parseDate(body?.from, 'from');
+    const to = parseDate(body?.to, 'to');
+    if (from > to) throw new BadRequestException('from must not be after to');
+
+    try {
+      return await rejectingInvalidParams(
+        this.store.createBackfill(
+          dagId,
+          from,
+          to,
+          { params: parseParams(body?.params), triggeredBy: this.options.resolveUser?.(request) },
+          this.clock(),
+        ),
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('limited to')) throw new BadRequestException(error.message);
+      throw error;
+    }
   }
 
   @Post(':dagId/pause')

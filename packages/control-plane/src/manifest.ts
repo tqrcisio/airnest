@@ -56,6 +56,7 @@ const entities: EntityManifest[] = [
         confirm: 'No new scheduled runs will be created until it is resumed.',
       },
       { name: 'unpause', label: 'Resume', scope: 'row' },
+      { name: 'backfill', label: 'Backfill', scope: 'detail', input: 'date-range' },
     ],
   },
   {
@@ -80,7 +81,15 @@ const entities: EntityManifest[] = [
       { name: 'failureReason', label: 'Failure reason', kind: 'text' },
       { name: 'dagId', label: 'DAG', kind: 'relation', relation: 'dags' },
     ],
-    actions: [],
+    actions: [
+      { name: 'clear-failed', label: 'Rerun failed tasks', scope: 'detail' },
+      {
+        name: 'clear-all',
+        label: 'Rerun everything',
+        scope: 'detail',
+        confirm: 'Every task of this run runs again, including the ones that succeeded.',
+      },
+    ],
   },
   {
     slug: 'task-instances',
@@ -92,7 +101,7 @@ const entities: EntityManifest[] = [
       { name: 'reason', label: 'Reason', kind: 'text' },
       { name: 'lastError', label: 'Last error', kind: 'text' },
     ],
-    actions: [],
+    actions: [{ name: 'clear', label: 'Rerun with downstream', scope: 'row' }],
   },
   {
     slug: 'attempts',
@@ -110,6 +119,18 @@ const entities: EntityManifest[] = [
       { name: 'startedAt', label: 'Started', kind: 'datetime', list: true },
       { name: 'finishedAt', label: 'Finished', kind: 'datetime', list: true },
       { name: 'error', label: 'Error', kind: 'text' },
+    ],
+    actions: [],
+  },
+  {
+    slug: 'pools',
+    label: { singular: 'Pool', plural: 'Pools' },
+    fields: [
+      { name: 'name', label: 'Pool', kind: 'code', list: true },
+      { name: 'slots', label: 'Slots', kind: 'number', list: true },
+      { name: 'running', label: 'Running', kind: 'number', list: true },
+      { name: 'queued', label: 'Queued', kind: 'number', list: true },
+      { name: 'description', label: 'Description', kind: 'text', list: true },
     ],
     actions: [],
   },
