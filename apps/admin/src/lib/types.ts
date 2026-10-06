@@ -1,6 +1,6 @@
-import type { Manifest } from '@airnest/control-plane';
+import type { Manifest } from '@airnest/manifest';
 
-export type { DagManifest, EntityManifest, FieldManifest, Manifest, Tone } from '@airnest/control-plane';
+export type { DagManifest, EntityManifest, FieldManifest, Manifest, Tone } from '@airnest/manifest';
 
 export type RunState = 'queued' | 'running' | 'success' | 'failed';
 

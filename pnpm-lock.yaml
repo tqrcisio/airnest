@@ -60,9 +60,9 @@ importers:
         specifier: ^7.88.0
         version: 7.89.0(@types/react@19.3.0)(react@19.3.0)
     devDependencies:
-      '@airnest/control-plane':
+      '@airnest/manifest':
         specifier: workspace:*
-        version: link:../../packages/control-plane
+        version: link:../../packages/manifest
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.3(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0))
@@ -123,6 +123,9 @@ importers:
       '@airnest/core':
         specifier: workspace:*
         version: link:../core
+      '@airnest/manifest':
+        specifier: workspace:*
+        version: link:../manifest
       '@airnest/postgres':
         specifier: workspace:*
         version: link:../postgres
@@ -160,6 +163,8 @@ importers:
       croner:
         specifier: 10.0.1
         version: 10.0.1
+
+  packages/manifest: {}
 
   packages/nestjs:
     dependencies:

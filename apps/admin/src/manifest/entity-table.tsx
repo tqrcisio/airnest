@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from '@tanstack/react-table';
+import { getCoreRowModel, useReactTable, type ColumnDef } from '@tanstack/react-table';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@airnest/ui/components/table';
 import type { EntityManifest } from '@/lib/types';
 import { FieldValue } from './field-value';
@@ -22,15 +22,15 @@ export function EntityTable<Row extends Record<string, unknown>>({
   empty,
 }: EntityTableProps<Row>) {
   const listed = entity.fields.filter((field) => field.list);
-  const columns: ColumnDef<Row>[] = listed.map((field, index) => ({
-    id: field.name,
-    header: field.label,
-    cell: ({ row }) => {
-      const content = <FieldValue field={field} value={row.original[field.name]} />;
-      return index === 0 && identity ? identity(row.original, content) : content;
-    },
-  }));
-  if (actions) columns.push({ id: 'actions', header: '', cell: ({ row }) => actions(row.original) });
+  const columns: ColumnDef<Row>[] = listed.map((field) => ({ id: field.name, header: field.label }));
+  if (actions) columns.push({ id: 'actions', header: '' });
+
+  const renderCell = (columnId: string, row: Row) => {
+    if (columnId === 'actions') return actions?.(row);
+    const field = listed.find((candidate) => candidate.name === columnId)!;
+    const content = <FieldValue field={field} value={row[field.name]} />;
+    return field === listed[0] && identity ? identity(row, content) : content;
+  };
 
   const table = useReactTable({ data: rows, columns, getCoreRowModel: getCoreRowModel(), getRowId: rowKey });
 
@@ -41,7 +41,7 @@ export function EntityTable<Row extends Record<string, unknown>>({
           <TableRow key={group.id}>
             {group.headers.map((header) => (
               <TableHead key={header.id} data-column={header.id}>
-                {flexRender(header.column.columnDef.header, header.getContext())}
+                {String(header.column.columnDef.header)}
               </TableHead>
             ))}
           </TableRow>
@@ -59,7 +59,7 @@ export function EntityTable<Row extends Record<string, unknown>>({
             <TableRow key={row.id}>
               {row.getVisibleCells().map((cell) => (
                 <TableCell key={cell.id} data-column={cell.column.id}>
-                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  {renderCell(cell.column.id, row.original)}
                 </TableCell>
               ))}
             </TableRow>

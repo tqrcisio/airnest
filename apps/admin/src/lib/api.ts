@@ -1,4 +1,6 @@
-const apiBase = import.meta.env.VITE_AIRNEST_API ?? '/airnest';
+import { runtimeConfig } from './runtime-config';
+
+const { apiBase } = runtimeConfig;
 
 export class ApiError extends Error {
   constructor(

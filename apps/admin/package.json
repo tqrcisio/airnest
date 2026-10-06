@@ -22,7 +22,6 @@
     "@fontsource-variable/jetbrains-mono": "^5.2.8"
   },
   "devDependencies": {
-    "@airnest/control-plane": "workspace:*",
     "@tailwindcss/vite": "^4",
     "@tanstack/router-cli": "^1.167.38",
     "@tanstack/router-plugin": "^1.168.40",
@@ -30,6 +29,7 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6",
     "tailwindcss": "^4",
-    "vite": "^8"
+    "vite": "^8",
+    "@airnest/manifest": "workspace:*"
   }
 }

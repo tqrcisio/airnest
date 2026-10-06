@@ -21,6 +21,24 @@
       "env": [
         "SQL_TEST_PG_URL"
       ]
+    },
+    "@airnest/control-plane#build": {
+      "dependsOn": [
+        "^build",
+        "@airnest/admin#build"
+      ],
+      "outputs": [
+        "dist/**",
+        "admin/**"
+      ]
+    },
+    "@airnest/control-plane#test": {
+      "dependsOn": [
+        "build"
+      ],
+      "env": [
+        "SQL_TEST_PG_URL"
+      ]
     }
   }
 }

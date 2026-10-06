@@ -4,3 +4,4 @@ dist
 *.tsbuildinfo
 .env
 .data
+packages/control-plane/admin

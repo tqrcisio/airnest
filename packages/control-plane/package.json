@@ -13,15 +13,19 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "admin"
+  ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "build": "rm -rf dist admin && tsc -p tsconfig.build.json && cp -r ../../apps/admin/dist admin",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@airnest/core": "workspace:*",
-    "@airnest/postgres": "workspace:*"
+    "@airnest/postgres": "workspace:*",
+    "@airnest/manifest": "workspace:*"
   },
   "peerDependencies": {
     "@nestjs/common": "^11.0.0 || ^12.0.0",
