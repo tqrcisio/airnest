@@ -1,8 +1,25 @@
 {
   "name": "@airnest/core",
-  "version": "0.0.1",
-  "description": "DAG definitions, scheduling and state rules for airnest",
+  "version": "0.0.0",
+  "description": "Airflow-style DAG engine: graph validation, trigger rules, run planning, retries and cron timetables",
+  "keywords": [
+    "dag",
+    "airflow",
+    "scheduler",
+    "workflow",
+    "cron"
+  ],
+  "author": "Tarcisio Ferreira",
   "license": "MIT",
+  "homepage": "https://tqrcisio.github.io/airnest-docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tqrcisio/airnest.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/tqrcisio/airnest/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,6 +33,13 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

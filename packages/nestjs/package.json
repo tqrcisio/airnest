@@ -1,8 +1,27 @@
 {
   "name": "@airnest/nestjs",
-  "version": "0.0.1",
-  "description": "Declare airnest DAGs as NestJS providers",
+  "version": "0.0.0",
+  "description": "Airflow-style DAGs for NestJS: declare DAGs with @Dag and @Task, scheduled and run by your app",
+  "keywords": [
+    "nestjs",
+    "nest",
+    "dag",
+    "airflow",
+    "scheduler",
+    "workflow",
+    "etl"
+  ],
+  "author": "Tarcisio Ferreira",
   "license": "MIT",
+  "homepage": "https://tqrcisio.github.io/airnest-docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tqrcisio/airnest.git",
+    "directory": "packages/nestjs"
+  },
+  "bugs": {
+    "url": "https://github.com/tqrcisio/airnest/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,6 +35,13 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

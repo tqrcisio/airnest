@@ -1,0 +1,10 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config/schema.json",
+  "changelog": ["@changesets/changelog-github", { "repo": "tqrcisio/airnest" }],
+  "commit": false,
+  "fixed": [["@airnest/core", "@airnest/manifest", "@airnest/postgres", "@airnest/nestjs", "@airnest/control-plane"]],
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}

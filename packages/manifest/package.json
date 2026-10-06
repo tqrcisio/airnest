@@ -1,8 +1,23 @@
 {
   "name": "@airnest/manifest",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "description": "Types of the manifest the airnest control plane serves to admin UIs",
+  "keywords": [
+    "dag",
+    "airflow",
+    "admin"
+  ],
+  "author": "Tarcisio Ferreira",
   "license": "MIT",
+  "homepage": "https://tqrcisio.github.io/airnest-docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tqrcisio/airnest.git",
+    "directory": "packages/manifest"
+  },
+  "bugs": {
+    "url": "https://github.com/tqrcisio/airnest/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,7 +28,16 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"

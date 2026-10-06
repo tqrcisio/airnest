@@ -1,8 +1,25 @@
 {
   "name": "@airnest/control-plane",
-  "version": "0.0.1",
-  "description": "HTTP API and manifest for inspecting and operating airnest DAGs",
+  "version": "0.0.0",
+  "description": "HTTP API and admin UI for airnest DAGs, served by a NestJS module",
+  "keywords": [
+    "nestjs",
+    "dag",
+    "airflow",
+    "admin",
+    "dashboard"
+  ],
+  "author": "Tarcisio Ferreira",
   "license": "MIT",
+  "homepage": "https://tqrcisio.github.io/airnest-docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tqrcisio/airnest.git",
+    "directory": "packages/control-plane"
+  },
+  "bugs": {
+    "url": "https://github.com/tqrcisio/airnest/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,6 +34,13 @@
     "dist",
     "admin"
   ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "rm -rf dist admin && tsc -p tsconfig.build.json && cp -r ../../apps/admin/dist admin",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -1,8 +1,25 @@
 {
   "name": "@airnest/postgres",
-  "version": "0.0.1",
-  "description": "PostgreSQL storage and task queue for airnest",
+  "version": "0.0.0",
+  "description": "PostgreSQL storage and task queue for airnest: runs, leases, retries, pools and logs",
+  "keywords": [
+    "dag",
+    "airflow",
+    "postgresql",
+    "queue",
+    "skip-locked"
+  ],
+  "author": "Tarcisio Ferreira",
   "license": "MIT",
+  "homepage": "https://tqrcisio.github.io/airnest-docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tqrcisio/airnest.git",
+    "directory": "packages/postgres"
+  },
+  "bugs": {
+    "url": "https://github.com/tqrcisio/airnest/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,7 +30,16 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
