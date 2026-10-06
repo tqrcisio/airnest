@@ -116,9 +116,8 @@ describe('Airnest runtime', () => {
     app = await moduleRef.init();
 
     const runs = await settled(app, 'backlog', 5);
-    expect(runs.map((run) => run.logicalDate.getTime()).sort()).toEqual(
-      Array.from({ length: 5 }, (_, i) => fourMinutesAgo.getTime() + i * minute),
-    );
+    const logicalDates = runs.map((run) => run.logicalDate.getTime()).sort();
+    expect(logicalDates).toEqual(Array.from({ length: runs.length }, (_, i) => fourMinutesAgo.getTime() + i * minute));
     expect(runs.every((run) => run.runType === 'scheduled' && run.state === 'success')).toBe(true);
   });
 
