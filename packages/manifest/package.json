@@ -1,6 +1,6 @@
 {
   "name": "@airnest/manifest",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Types of the manifest the airnest control plane serves to admin UIs",
   "keywords": [
     "dag",

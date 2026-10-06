@@ -1,6 +1,6 @@
 {
   "name": "@airnest/postgres",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "PostgreSQL storage and task queue for airnest: runs, leases, retries, pools and logs",
   "keywords": [
     "dag",
