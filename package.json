@@ -1,0 +1,25 @@
+{
+  "name": "airnest",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.18.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "oxlint packages/",
+    "format": "prettier --write \"packages/**/*.ts\"",
+    "format:check": "prettier --check \"packages/**/*.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "oxlint": "1.87.0",
+    "prettier": "3.9.9",
+    "turbo": "2.11.7",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}
