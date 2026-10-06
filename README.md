@@ -4,7 +4,7 @@ Orquestração de DAGs no molde do Airflow para quem já está em NestJS e Postg
 intervalo de dados, catchup, backfill, trigger rules e retries, com control plane NestJS e admin
 React gerado a partir da definição das DAGs.
 
-> Em construção. Nome provisório.
+> Em construção. Documentação: https://tqrcisio.github.io/airnest-docs
 
 ## Pacotes
 
