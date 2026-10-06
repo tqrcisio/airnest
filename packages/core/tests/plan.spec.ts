@@ -1,13 +1,13 @@
-import { defineDag, planRun } from '../src/index.js';
+import { planRun } from '../src/index.js';
+import { dag, task } from './support.js';
 
-const noop = () => undefined;
-
-const { definition: diamond } = defineDag({ id: 'diamond' }, (dag) => {
-  const extract = dag.task('extract', noop);
-  const left = dag.task('left', { after: [extract] }, noop);
-  const right = dag.task('right', { after: [extract] }, noop);
-  dag.task('load', { after: [left, right] }, noop);
-});
+const diamond = dag(
+  'diamond',
+  task('extract'),
+  task('left', ['extract']),
+  task('right', ['extract']),
+  task('load', ['left', 'right']),
+);
 
 describe('planRun', () => {
   it('schedules only the root of a fresh run', () => {
@@ -33,11 +33,12 @@ describe('planRun', () => {
   });
 
   it('succeeds when a failure is handled by a downstream cleanup', () => {
-    const { definition } = defineDag({ id: 'with_cleanup' }, (dag) => {
-      const load = dag.task('load', noop);
-      dag.task('notify_failure', { after: [load], triggerRule: 'one_failed' }, noop);
-    });
-    expect(planRun(definition, { load: 'success' }).skip.map((d) => d.taskId)).toEqual(['notify_failure']);
-    expect(planRun(definition, { load: 'success', notify_failure: 'skipped' }).runState).toBe('success');
+    const withCleanup = dag(
+      'with_cleanup',
+      task('load'),
+      task('notify_failure', ['load'], { triggerRule: 'one_failed' }),
+    );
+    expect(planRun(withCleanup, { load: 'success' }).skip.map((d) => d.taskId)).toEqual(['notify_failure']);
+    expect(planRun(withCleanup, { load: 'success', notify_failure: 'skipped' }).runState).toBe('success');
   });
 });

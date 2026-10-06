@@ -1,6 +1,6 @@
 import { Cron } from 'croner';
 import type { DagDefinition } from './definition.js';
-import type { DataInterval } from './define-dag.js';
+import type { DataInterval } from './context.js';
 
 export type ScheduledRun = {
   logicalDate: Date;

@@ -28,6 +28,21 @@ export type DagDefinition = {
   tasks: TaskDefinition[];
 };
 
+export type TaskSettings = Omit<TaskDefinition, 'id' | 'upstream'>;
+
+const fiveMinutes = 5 * 60_000;
+const oneDay = 24 * 60 * 60_000;
+
+export const taskDefaults: TaskSettings = {
+  triggerRule: 'all_success',
+  retries: 0,
+  retryDelayMs: fiveMinutes,
+  retryBackoff: 'fixed',
+  maxRetryDelayMs: oneDay,
+};
+
+export const airflowDefaultMaxActiveRuns = 16;
+
 export class InvalidDagError extends Error {
   constructor(
     readonly dagId: string,
