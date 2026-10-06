@@ -51,7 +51,7 @@ describe.skipIf(!serverUrl)('PostgresDagStore on a real PostgreSQL server', () =
   });
 
   it('lets several schedulers advance the same runs without queueing a task twice', async () => {
-    const chain = dag('chain', task('extract'), task('load', ['extract']));
+    const chain = { ...dag('chain', task('extract'), task('load', ['extract'])), maxActiveRuns: 50 };
     await store.registerDag(chain, hashDag(chain), clock.start);
     const days = Array.from({ length: 30 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`);
     for (const day of days) await store.createRun(dailyRun('chain', day), clock.start);
@@ -89,23 +89,30 @@ describe.skipIf(!serverUrl)('PostgresDagStore on a real PostgreSQL server', () =
     await store.advanceRuns(clock.start, 100);
 
     let peak = 0;
-    let running = 0;
+    let done = false;
+    const sample = async () => {
+      while (!done) {
+        const pool = (await store.pools()).find((candidate) => candidate.name === 'warehouse')!;
+        peak = Math.max(peak, pool.running);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+    };
     const work = async (workerId: string) => {
       for (;;) {
         const [claimed] = await store.claimTasks(workerId, clock.start, 60_000, 1);
         if (!claimed) {
-          const [pool] = await store.pools();
-          if (pool.queued === 0) return;
+          const pool = (await store.pools()).find((candidate) => candidate.name === 'warehouse')!;
+          if (pool.queued === 0 && pool.running === 0) return;
           continue;
         }
-        running++;
-        peak = Math.max(peak, running);
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        running--;
+        if (claimed.dagId === 'pooled') await new Promise((resolve) => setTimeout(resolve, 30));
         await store.succeed(claimed.attemptId, null, clock.start);
       }
     };
+    const sampling = sample();
     await Promise.all(Array.from({ length: 8 }, (_, i) => work(`worker-${i}`)));
+    done = true;
+    await sampling;
     expect(peak).toBeLessThanOrEqual(3);
     expect(peak).toBeGreaterThan(1);
   });
