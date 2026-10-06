@@ -80,4 +80,33 @@ describe.skipIf(!serverUrl)('PostgresDagStore on a real PostgreSQL server', () =
     );
     for (let i = 0; i < attempts.length; i++) expect(outcomes[2 * i] !== outcomes[2 * i + 1]).toBe(true);
   });
+
+  it('keeps a pool within its slots while workers compete', async () => {
+    const pooled = dag('pooled', ...Array.from({ length: 40 }, (_, i) => task(`db_${i}`, [], { pool: 'warehouse' })));
+    await store.registerDag(pooled, hashDag(pooled), clock.start);
+    await store.upsertPools({ warehouse: 3 }, clock.start);
+    await store.createRun(dailyRun('pooled'), clock.start);
+    await store.advanceRuns(clock.start, 100);
+
+    let peak = 0;
+    let running = 0;
+    const work = async (workerId: string) => {
+      for (;;) {
+        const [claimed] = await store.claimTasks(workerId, clock.start, 60_000, 1);
+        if (!claimed) {
+          const [pool] = await store.pools();
+          if (pool.queued === 0) return;
+          continue;
+        }
+        running++;
+        peak = Math.max(peak, running);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        running--;
+        await store.succeed(claimed.attemptId, null, clock.start);
+      }
+    };
+    await Promise.all(Array.from({ length: 8 }, (_, i) => work(`worker-${i}`)));
+    expect(peak).toBeLessThanOrEqual(3);
+    expect(peak).toBeGreaterThan(1);
+  });
 });

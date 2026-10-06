@@ -1,5 +1,6 @@
 export * from './context.js';
 export * from './definition.js';
+export * from './params.js';
 export * from './plan.js';
 export * from './retry.js';
 export * from './states.js';

@@ -50,3 +50,23 @@ export function nextScheduledRun(
   const intervalStart = cron.previousRuns(1, next)[0] ?? next;
   return { logicalDate: next, dataInterval: { start: intervalStart, end: next } };
 }
+
+export const maxBackfillRuns = 1000;
+
+export function scheduledRunsBetween(
+  dag: Pick<DagDefinition, 'id' | 'schedule'>,
+  from: Date,
+  to: Date,
+): ScheduledRun[] {
+  if (!dag.schedule) throw new Error(`DAG ${dag.id} has no schedule to backfill`);
+  const cron = new Cron(dag.schedule.cron, { timezone: dag.schedule.timezone });
+  const runs: ScheduledRun[] = [];
+  for (let fire = firstFireAtOrAfter(cron, from); fire && fire <= to; fire = cron.nextRun(fire)) {
+    if (runs.length === maxBackfillRuns) {
+      throw new Error(`A backfill of ${dag.id} is limited to ${maxBackfillRuns} runs; narrow the range`);
+    }
+    const start = cron.previousRuns(1, fire)[0] ?? fire;
+    runs.push({ logicalDate: fire, dataInterval: { start, end: fire } });
+  }
+  return runs;
+}

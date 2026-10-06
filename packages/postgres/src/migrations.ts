@@ -84,6 +84,29 @@ const migrations: string[][] = [
       primary key (run_id, task_id, key)
     )`,
   ],
+  [
+    `create table airnest.pool (
+      name text primary key,
+      slots integer not null check (slots >= 0),
+      description text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )`,
+    `alter table airnest.task_instance add column pool text`,
+    `create index task_instance_pool_running on airnest.task_instance (pool) where state = 'running' and pool is not null`,
+    `create table airnest.task_log (
+      seq bigserial primary key,
+      run_id uuid not null references airnest.dag_run (run_id) on delete cascade,
+      task_id text not null,
+      try_number integer not null,
+      level text not null check (level in ('log', 'warn', 'error')),
+      message text not null,
+      created_at timestamptz not null
+    )`,
+    `create index task_log_by_task on airnest.task_log (run_id, task_id, seq)`,
+    `alter table airnest.dag_run add column cleared_by text`,
+    `alter table airnest.dag_run add column cleared_at timestamptz`,
+  ],
 ];
 
 export async function migrate(db: SqlClient) {

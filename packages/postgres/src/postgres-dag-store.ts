@@ -1,8 +1,13 @@
 import {
   canRetry,
+  InvalidParamsError,
+  isFailure,
+  isFinished,
   nextScheduledRun,
   planRun,
+  resolveParams,
   retryDelayMs,
+  scheduledRunsBetween,
   ScheduleStalledError,
   type DagDefinition,
   type DataInterval,
@@ -33,6 +38,36 @@ export type ClaimedTask = {
   params: Record<string, unknown>;
   leaseExpiresAt: Date;
 };
+
+export class TaskStillActiveError extends Error {
+  constructor(readonly taskIds: string[]) {
+    super(`Tasks ${taskIds.join(', ')} are still running; wait for them to finish before clearing`);
+  }
+}
+
+export type ClearOptions = {
+  taskIds?: string[];
+  downstream?: boolean;
+  onlyFailed?: boolean;
+  clearedBy?: string;
+};
+
+export type BackfillOptions = { params?: Record<string, unknown>; triggeredBy?: string };
+
+export type LogLevel = 'log' | 'warn' | 'error';
+
+export type LogEntry = {
+  runId: string;
+  taskId: string;
+  tryNumber: number;
+  level: LogLevel;
+  message: string;
+  at: Date;
+};
+
+export type LogLine = { seq: number; tryNumber: number; level: LogLevel; message: string; at: Date };
+
+export type PoolSummary = { name: string; slots: number; running: number; queued: number; description: string | null };
 
 export type FinishedRun = { runId: string; dagId: string; state: RunState; reason?: string };
 
@@ -142,12 +177,7 @@ export class PostgresDagStore {
 
   async createRun(run: NewRun, now: Date): Promise<string | null> {
     return this.db.transaction(async (tx) => {
-      const { rows: dags } = await tx.query<{ latest_version: string }>(
-        'select latest_version from airnest.dag where dag_id = $1',
-        [run.dagId],
-      );
-      if (dags.length === 0) throw new Error(`DAG ${run.dagId} is not registered`);
-      return this.insertRun(tx, run, dags[0].latest_version, now);
+      return this.insertRun(tx, run, await this.latestVersion(tx, run.dagId), now);
     });
   }
 
@@ -164,7 +194,7 @@ export class PostgresDagStore {
         try {
           await this.createDueRunsOf(tx, dag, now, maxRunsPerDag, report);
         } catch (error) {
-          if (!(error instanceof ScheduleStalledError)) throw error;
+          if (!(error instanceof ScheduleStalledError || error instanceof InvalidParamsError)) throw error;
           await tx.query('update airnest.dag set next_run_after = null where dag_id = $1', [dag.dag_id]);
           report.stalled.push(dag.dag_id);
         }
@@ -198,11 +228,13 @@ export class PostgresDagStore {
 
     await tx.query(
       'update airnest.dag set last_logical_date = $2, next_run_after = $3, updated_at = $4 where dag_id = $1',
-      [dag.dag_id, last, slots > 0 ? (next?.logicalDate ?? null) : now, now],
+      [dag.dag_id, last, next?.logicalDate ?? null, now],
     );
   }
 
   private async insertRun(tx: Queryable, run: NewRun, version: string, now: Date) {
+    const definition = await this.definition(tx, run.dagId, version);
+    const params = resolveParams(definition.params, run.params);
     const { rows: created } = await tx.query<{ run_id: string }>(
       `insert into airnest.dag_run (dag_id, dag_version, logical_date, data_interval_start, data_interval_end,
          run_type, state, params, triggered_by, created_at, updated_at)
@@ -216,7 +248,7 @@ export class PostgresDagStore {
         run.dataInterval.start,
         run.dataInterval.end,
         run.runType,
-        JSON.stringify(run.params ?? {}),
+        JSON.stringify(params),
         run.triggeredBy ?? null,
         now,
       ],
@@ -224,13 +256,87 @@ export class PostgresDagStore {
     if (created.length === 0) return null;
     const runId = created[0].run_id;
 
-    const definition = await this.definition(tx, run.dagId, version);
     await tx.query(
-      `insert into airnest.task_instance (run_id, task_id, state, created_at, updated_at)
-       select $1, task_id, 'pending', $3, $3 from unnest($2::text[]) as task_id`,
-      [runId, definition.tasks.map((task) => task.id), now],
+      `insert into airnest.task_instance (run_id, task_id, pool, state, created_at, updated_at)
+       select $1, task.id, task.pool, 'pending', $4, $4 from unnest($2::text[], $3::text[]) as task(id, pool)`,
+      [runId, definition.tasks.map((task) => task.id), definition.tasks.map((task) => task.pool ?? null), now],
     );
     return runId;
+  }
+
+  async createBackfill(dagId: string, from: Date, to: Date, options: BackfillOptions, now: Date) {
+    return this.db.transaction(async (tx) => {
+      const version = await this.latestVersion(tx, dagId);
+      const definition = await this.definition(tx, dagId, version);
+      const created: string[] = [];
+      let skipped = 0;
+      for (const { logicalDate, dataInterval } of scheduledRunsBetween(definition, from, to)) {
+        const runId = await this.insertRun(
+          tx,
+          {
+            dagId,
+            logicalDate,
+            dataInterval,
+            runType: 'backfill',
+            params: options.params,
+            triggeredBy: options.triggeredBy,
+          },
+          version,
+          now,
+        );
+        if (runId) created.push(runId);
+        else skipped++;
+      }
+      return { created, skipped };
+    });
+  }
+
+  async clearRun(runId: string, options: ClearOptions, now: Date): Promise<string[] | null> {
+    return this.db.transaction(async (tx) => {
+      const { rows: runs } = await tx.query<RunRow>(
+        'select run_id, dag_id, dag_version, state from airnest.dag_run where run_id = $1 for update',
+        [runId],
+      );
+      if (runs.length === 0) return null;
+      const definition = await this.definition(tx, runs[0].dag_id, runs[0].dag_version);
+      const { rows: tasks } = await tx.query<{ task_id: string; state: TaskState }>(
+        'select task_id, state from airnest.task_instance where run_id = $1 for update',
+        [runId],
+      );
+      const stateOf = new Map(tasks.map((task) => [task.task_id, task.state]));
+
+      const unknown = (options.taskIds ?? []).filter((taskId) => !stateOf.has(taskId));
+      if (unknown.length > 0) throw new Error(`Run ${runId} has no task ${unknown.join(', ')}`);
+
+      let selected = options.taskIds ?? definition.tasks.map((task) => task.id);
+      if (options.onlyFailed) selected = selected.filter((taskId) => isFailure(stateOf.get(taskId)!));
+      if (options.downstream ?? true) selected = withDownstream(definition, selected);
+
+      const active = selected.filter((taskId) => {
+        const state = stateOf.get(taskId)!;
+        return !isFinished(state) && state !== 'pending';
+      });
+      if (active.length > 0) throw new TaskStillActiveError(active);
+
+      const cleared = selected.filter((taskId) => isFinished(stateOf.get(taskId)!));
+      if (cleared.length === 0) return [];
+
+      await tx.query(
+        `update airnest.task_instance
+         set state = 'pending', reason = null, last_error = null, retry_at = null, lease_expires_at = null,
+             finished_at = null, updated_at = $3
+         where run_id = $1 and task_id = any($2::text[])`,
+        [runId, cleared, now],
+      );
+      await tx.query(
+        `update airnest.dag_run
+         set state = case when state in ('success', 'failed') then 'queued' else state end,
+             failure_reason = null, finished_at = null, cleared_by = $2, cleared_at = $3, updated_at = $3
+         where run_id = $1`,
+        [runId, options.clearedBy ?? null, now],
+      );
+      return cleared;
+    });
   }
 
   async advanceRuns(now: Date, limit = 50): Promise<AdvanceReport> {
@@ -251,6 +357,7 @@ export class PostgresDagStore {
 
   private async advanceRun(tx: Queryable, run: RunRow, now: Date, report: AdvanceReport) {
     const definition = await this.definition(tx, run.dag_id, run.dag_version);
+    if (run.state === 'queued' && !(await this.hasRunningSlot(tx, run.dag_id, definition.maxActiveRuns))) return null;
     const { rows: tasks } = await tx.query<TaskRow>(
       'select task_id, state, retry_at from airnest.task_instance where run_id = $1',
       [run.run_id],
@@ -301,6 +408,15 @@ export class PostgresDagStore {
     return { runId: run.run_id, dagId: run.dag_id, state: plan.runState, reason };
   }
 
+  private async hasRunningSlot(tx: Queryable, dagId: string, maxActiveRuns: number) {
+    await tx.query(`select pg_advisory_xact_lock(hashtext('airnest:runs:' || $1))`, [dagId]);
+    const { rows } = await tx.query<{ count: number }>(
+      `select count(*)::int as count from airnest.dag_run where dag_id = $1 and state = 'running'`,
+      [dagId],
+    );
+    return rows[0].count < maxActiveRuns;
+  }
+
   private async moveTasks(tx: Queryable, runId: string, taskIds: string[], from: TaskState, to: TaskState, now: Date) {
     if (taskIds.length === 0) return;
     await tx.query(
@@ -312,6 +428,15 @@ export class PostgresDagStore {
 
   async claimTasks(workerId: string, now: Date, leaseMs: number, limit = 1): Promise<ClaimedTask[]> {
     return this.db.transaction(async (tx) => {
+      const { rows: free } = await tx.query<{ run_id: string; task_id: string }>(
+        `select run_id, task_id from airnest.task_instance
+         where state = 'queued' and pool is null order by updated_at limit $1 for update skip locked`,
+        [limit],
+      );
+      const pooled = free.length < limit ? await this.claimablePooledTasks(tx, limit - free.length) : [];
+      const picked = [...free, ...pooled];
+      if (picked.length === 0) return [];
+
       const { rows: claimed } = await tx.query<{
         attempt_id: string;
         run_id: string;
@@ -319,16 +444,19 @@ export class PostgresDagStore {
         try_number: number;
         lease_expires_at: Date;
       }>(
-        `with next as (
-           select run_id, task_id from airnest.task_instance
-           where state = 'queued' order by updated_at limit $1 for update skip locked
-         )
-         update airnest.task_instance ti
-         set state = 'running', try_number = ti.try_number + 1, attempt_id = gen_random_uuid(), worker_id = $2,
-             lease_expires_at = $3, started_at = $4, finished_at = null, updated_at = $4
-         from next where ti.run_id = next.run_id and ti.task_id = next.task_id
+        `update airnest.task_instance ti
+         set state = 'running', try_number = ti.try_number + 1, attempt_id = gen_random_uuid(), worker_id = $3,
+             lease_expires_at = $4, started_at = $5, finished_at = null, updated_at = $5
+         from unnest($1::uuid[], $2::text[]) as picked(run_id, task_id)
+         where ti.run_id = picked.run_id and ti.task_id = picked.task_id and ti.state = 'queued'
          returning ti.attempt_id, ti.run_id, ti.task_id, ti.try_number, ti.lease_expires_at`,
-        [limit, workerId, new Date(now.getTime() + leaseMs), now],
+        [
+          picked.map((task) => task.run_id),
+          picked.map((task) => task.task_id),
+          workerId,
+          new Date(now.getTime() + leaseMs),
+          now,
+        ],
       );
       if (claimed.length === 0) return [];
 
@@ -361,6 +489,113 @@ export class PostgresDagStore {
         };
       });
     });
+  }
+
+  private async claimablePooledTasks(tx: Queryable, limit: number) {
+    const { rows: lock } = await tx.query<{ locked: boolean }>(
+      `select pg_try_advisory_xact_lock(hashtext('airnest:pools')) as locked`,
+    );
+    if (!lock[0].locked) return [];
+
+    const { rows: candidates } = await tx.query<{ run_id: string; task_id: string }>(
+      `with open_slots as (
+         select p.name, p.slots - count(r.task_id) as free
+         from airnest.pool p
+         left join airnest.task_instance r on r.pool = p.name and r.state = 'running'
+         group by p.name, p.slots
+       ),
+       ranked as (
+         select run_id, task_id, pool, row_number() over (partition by pool order by updated_at) as position
+         from airnest.task_instance where state = 'queued' and pool is not null
+       )
+       select ranked.run_id, ranked.task_id from ranked
+       join open_slots on open_slots.name = ranked.pool
+       where ranked.position <= open_slots.free
+       limit $1`,
+      [limit],
+    );
+    if (candidates.length === 0) return [];
+    const { rows } = await tx.query<{ run_id: string; task_id: string }>(
+      `select ti.run_id, ti.task_id from airnest.task_instance ti
+       join unnest($1::uuid[], $2::text[]) as candidate(run_id, task_id)
+         on ti.run_id = candidate.run_id and ti.task_id = candidate.task_id
+       where ti.state = 'queued'
+       for update of ti skip locked`,
+      [candidates.map((task) => task.run_id), candidates.map((task) => task.task_id)],
+    );
+    return rows;
+  }
+
+  async upsertPools(pools: Record<string, number | { slots: number; description?: string }>, now: Date) {
+    for (const [name, pool] of Object.entries(pools)) {
+      const { slots, description } = typeof pool === 'number' ? { slots: pool, description: undefined } : pool;
+      await this.db.query(
+        `insert into airnest.pool (name, slots, description, created_at, updated_at) values ($1, $2, $3, $4, $4)
+         on conflict (name) do update set slots = excluded.slots, description = excluded.description,
+           updated_at = excluded.updated_at`,
+        [name, slots, description ?? null, now],
+      );
+    }
+  }
+
+  async pools(): Promise<PoolSummary[]> {
+    const { rows } = await this.db.query<PoolSummary>(
+      `select p.name, p.slots, p.description,
+         count(ti.task_id) filter (where ti.state = 'running')::int as running,
+         count(ti.task_id) filter (where ti.state = 'queued')::int as queued
+       from airnest.pool p left join airnest.task_instance ti on ti.pool = p.name
+       group by p.name, p.slots, p.description order by p.name`,
+    );
+    return rows;
+  }
+
+  async appendLogs(entries: LogEntry[]) {
+    if (entries.length === 0) return;
+    await this.db.query(
+      `insert into airnest.task_log (run_id, task_id, try_number, level, message, created_at)
+       select * from unnest($1::uuid[], $2::text[], $3::int[], $4::text[], $5::text[], $6::timestamptz[])`,
+      [
+        entries.map((entry) => entry.runId),
+        entries.map((entry) => entry.taskId),
+        entries.map((entry) => entry.tryNumber),
+        entries.map((entry) => entry.level),
+        entries.map((entry) => entry.message),
+        entries.map((entry) => entry.at),
+      ],
+    );
+  }
+
+  async logs(runId: string, taskId: string, afterSeq = 0, limit = 1000): Promise<LogLine[]> {
+    const { rows } = await this.db.query<{
+      seq: string;
+      try_number: number;
+      level: LogLevel;
+      message: string;
+      created_at: Date;
+    }>(
+      `select seq, try_number, level, message, created_at from airnest.task_log
+       where run_id = $1 and task_id = $2 and seq > $3 order by seq limit $4`,
+      [runId, taskId, afterSeq, limit],
+    );
+    return rows.map((row) => ({
+      seq: Number(row.seq),
+      tryNumber: row.try_number,
+      level: row.level,
+      message: row.message,
+      at: row.created_at,
+    }));
+  }
+
+  async purgeRunsBefore(cutoff: Date, limit = 500) {
+    const { rows } = await this.db.query(
+      `delete from airnest.dag_run where run_id in (
+         select run_id from airnest.dag_run
+         where state in ('success', 'failed') and coalesce(finished_at, logical_date) < $1
+         order by logical_date limit $2
+       ) returning 1`,
+      [cutoff, limit],
+    );
+    return rows.length;
   }
 
   async heartbeat(attemptId: string, now: Date, leaseMs: number) {
@@ -587,6 +822,15 @@ export class PostgresDagStore {
     );
   }
 
+  private async latestVersion(q: Queryable, dagId: string) {
+    const { rows } = await q.query<{ latest_version: string }>(
+      'select latest_version from airnest.dag where dag_id = $1',
+      [dagId],
+    );
+    if (rows.length === 0) throw new Error(`DAG ${dagId} is not registered`);
+    return rows[0].latest_version;
+  }
+
   private async definition(q: Queryable, dagId: string, version: string) {
     const key = `${dagId}@${version}`;
     const cached = this.definitions.get(key);
@@ -600,4 +844,22 @@ export class PostgresDagStore {
     this.definitions.set(key, rows[0].definition);
     return rows[0].definition;
   }
+}
+
+function withDownstream(definition: DagDefinition, taskIds: string[]) {
+  const children = new Map<string, string[]>();
+  for (const task of definition.tasks) {
+    for (const parent of task.upstream) children.set(parent, [...(children.get(parent) ?? []), task.id]);
+  }
+  const reached = new Set(taskIds);
+  const frontier = [...taskIds];
+  while (frontier.length > 0) {
+    for (const child of children.get(frontier.pop()!) ?? []) {
+      if (!reached.has(child)) {
+        reached.add(child);
+        frontier.push(child);
+      }
+    }
+  }
+  return definition.tasks.map((task) => task.id).filter((taskId) => reached.has(taskId));
 }
