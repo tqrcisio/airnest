@@ -48,6 +48,27 @@ export type TaskSummary = {
   lastError: string | null;
 };
 
+export type DagSummary = {
+  dagId: string;
+  version: string;
+  definition: DagDefinition;
+  isPaused: boolean;
+  pausedBy: string | null;
+  nextRunAfter: Date | null;
+  lastLogicalDate: Date | null;
+  lastRunState: RunState | null;
+};
+
+export type AttemptSummary = {
+  attemptId: string;
+  tryNumber: number;
+  workerId: string;
+  state: 'success' | 'failed' | 'up_for_retry';
+  error: string | null;
+  startedAt: Date;
+  finishedAt: Date;
+};
+
 export type RunSummary = {
   runId: string;
   dagId: string;
@@ -59,6 +80,25 @@ export type RunSummary = {
   tasks: TaskSummary[];
 };
 
+type DagRow = {
+  dag_id: string;
+  latest_version: string;
+  definition: DagDefinition;
+  is_paused: boolean;
+  paused_by: string | null;
+  next_run_after: Date | null;
+  last_logical_date: Date | null;
+  last_run_state: RunState | null;
+};
+type RunListRow = {
+  run_id: string;
+  dag_id: string;
+  run_type: RunType;
+  state: RunState;
+  logical_date: Date;
+  failure_reason: string | null;
+  triggered_by: string | null;
+};
 type DueDagRow = { dag_id: string; latest_version: string; last_logical_date: Date | null };
 type RunRow = { run_id: string; dag_id: string; dag_version: string; state: RunState };
 type TaskRow = { task_id: string; state: TaskState; retry_at: Date | null };
@@ -411,22 +451,83 @@ export class PostgresDagStore {
     return Object.fromEntries(rows.map((row) => [row.task_id, row.value]));
   }
 
+  async dags(dagId?: string): Promise<DagSummary[]> {
+    const { rows } = await this.db.query<DagRow>(
+      `select d.dag_id, d.latest_version, v.definition, d.is_paused, d.paused_by, d.next_run_after, d.last_logical_date,
+         (select r.state from airnest.dag_run r where r.dag_id = d.dag_id order by r.logical_date desc limit 1)
+           as last_run_state
+       from airnest.dag d join airnest.dag_version v on v.dag_id = d.dag_id and v.version = d.latest_version
+       where $1::text is null or d.dag_id = $1
+       order by d.dag_id`,
+      [dagId ?? null],
+    );
+    return rows.map((row) => ({
+      dagId: row.dag_id,
+      version: row.latest_version,
+      definition: row.definition,
+      isPaused: row.is_paused,
+      pausedBy: row.paused_by,
+      nextRunAfter: row.next_run_after,
+      lastLogicalDate: row.last_logical_date,
+      lastRunState: row.last_run_state,
+    }));
+  }
+
+  async setPaused(dagId: string, paused: boolean, by: string | null, now: Date) {
+    const { rows } = await this.db.query(
+      `update airnest.dag set is_paused = $2, paused_by = case when $2 then $3 end, updated_at = $4
+       where dag_id = $1 returning 1`,
+      [dagId, paused, by, now],
+    );
+    return rows.length > 0;
+  }
+
   async runs(dagId: string, limit = 25): Promise<RunSummary[]> {
-    const { rows: runs } = await this.db.query<{
-      run_id: string;
-      dag_id: string;
-      run_type: RunType;
-      state: RunState;
-      logical_date: Date;
-      failure_reason: string | null;
-      triggered_by: string | null;
-    }>(
+    const { rows } = await this.db.query<RunListRow>(
       `select run_id, dag_id, run_type, state, logical_date, failure_reason, triggered_by from airnest.dag_run
        where dag_id = $1 order by logical_date desc limit $2`,
       [dagId, limit],
     );
-    if (runs.length === 0) return [];
+    return this.withTasks(rows);
+  }
 
+  async run(runId: string): Promise<RunSummary | null> {
+    const { rows } = await this.db.query<RunListRow>(
+      `select run_id, dag_id, run_type, state, logical_date, failure_reason, triggered_by from airnest.dag_run
+       where run_id = $1`,
+      [runId],
+    );
+    const [run] = await this.withTasks(rows);
+    return run ?? null;
+  }
+
+  async attempts(runId: string, taskId: string): Promise<AttemptSummary[]> {
+    const { rows } = await this.db.query<{
+      attempt_id: string;
+      try_number: number;
+      worker_id: string;
+      state: AttemptSummary['state'];
+      error: string | null;
+      started_at: Date;
+      finished_at: Date;
+    }>(
+      `select attempt_id, try_number, worker_id, state, error, started_at, finished_at from airnest.task_attempt
+       where run_id = $1 and task_id = $2 order by try_number`,
+      [runId, taskId],
+    );
+    return rows.map((row) => ({
+      attemptId: row.attempt_id,
+      tryNumber: row.try_number,
+      workerId: row.worker_id,
+      state: row.state,
+      error: row.error,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+    }));
+  }
+
+  private async withTasks(runs: RunListRow[]): Promise<RunSummary[]> {
+    if (runs.length === 0) return [];
     const { rows: tasks } = await this.db.query<{
       run_id: string;
       task_id: string;
