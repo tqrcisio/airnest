@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { PostgresDagStore } from '@airnest/postgres';
+import { PostgresDagStore, type BackfillOptions, type ClearOptions } from '@airnest/postgres';
 import { AIRNEST_OPTIONS, type AirnestModuleOptions } from './airnest.module-definition.js';
 import { resolveSettings } from './settings.js';
 
@@ -45,6 +45,16 @@ export class Airnest {
     );
     if (!runId) throw new RunAlreadyExistsError(dagId, logicalDate);
     return runId;
+  }
+
+  async clear(runId: string, options: ClearOptions = {}) {
+    const cleared = await this.store.clearRun(runId, options, this.clock());
+    if (!cleared) throw new Error(`Run ${runId} does not exist`);
+    return cleared;
+  }
+
+  backfill(dagId: string, range: { from: Date; to: Date }, options: BackfillOptions = {}) {
+    return this.store.createBackfill(dagId, range.from, range.to, options, this.clock());
   }
 
   runs(dagId: string, limit?: number) {

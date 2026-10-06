@@ -6,6 +6,9 @@ export function resolveSettings(options: AirnestModuleOptions) {
     migrate: options.migrate ?? true,
     clock: options.clock ?? (() => new Date()),
     shutdownTimeoutMs: options.shutdownTimeoutMs ?? 30_000,
+    pools: options.pools ?? {},
+    retentionDays: options.retention?.days,
+    enhancers: options.enhancers ?? false,
     scheduler: { enabled: options.scheduler?.enabled ?? true, pollMs: options.scheduler?.pollMs ?? 1000 },
     worker: {
       enabled: options.worker?.enabled ?? true,

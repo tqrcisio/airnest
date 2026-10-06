@@ -20,6 +20,10 @@ export type RegisteredDag = {
 
 type DagInstance = Record<string, (...args: unknown[]) => unknown>;
 
+export type TaskInvoker = (ctx: TaskContext) => Promise<unknown>;
+
+export type WrapTask = (methodName: string, invoke: TaskInvoker) => TaskInvoker;
+
 function paramsOf(instance: object, method: string): TaskParam[] {
   const declared: TaskParam[] = Reflect.getMetadata(TASK_PARAMS, Object.getPrototypeOf(instance), method) ?? [];
   return [...declared].sort((a, b) => a.index - b.index);
@@ -34,7 +38,12 @@ function outputsReadOutsideUpstream(task: TaskDefinition, params: TaskParam[]) {
     );
 }
 
-export function compileDag(options: DagOptions, instance: object, methodNames: string[]): RegisteredDag {
+export function compileDag(
+  options: DagOptions,
+  instance: object,
+  methodNames: string[],
+  wrap: WrapTask = (_, invoke) => invoke,
+): RegisteredDag {
   const methods = instance as DagInstance;
   const tasks: TaskDefinition[] = [];
   const params = new Map<string, TaskParam[]>();
@@ -62,14 +71,25 @@ export function compileDag(options: DagOptions, instance: object, methodNames: s
   const misreadOutputs = tasks.flatMap((task) => outputsReadOutsideUpstream(task, params.get(task.id)!));
   if (misreadOutputs.length > 0) throw new InvalidDagError(definition.id, misreadOutputs);
 
+  const invokers = new Map(
+    tasks.map((task) => {
+      const taskParams = params.get(task.id)!;
+      const invoke: TaskInvoker = async (ctx) =>
+        methods[task.id].apply(
+          instance,
+          taskParams.map((param) => resolveTaskParam(param, ctx)),
+        );
+      return [task.id, wrap(task.id, invoke)] as const;
+    }),
+  );
+
   return {
     definition,
     hash: hashDag(definition),
     async runTask(taskId, ctx) {
-      const taskParams = params.get(taskId);
-      if (!taskParams) throw new Error(`DAG ${definition.id} has no task ${taskId}`);
-      const args = taskParams.map((param) => resolveTaskParam(param, ctx));
-      return methods[taskId].apply(instance, args);
+      const invoke = invokers.get(taskId);
+      if (!invoke) throw new Error(`DAG ${definition.id} has no task ${taskId}`);
+      return invoke(ctx);
     },
   };
 }

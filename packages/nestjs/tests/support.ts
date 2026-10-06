@@ -10,6 +10,7 @@ export function taskContext(overrides: Partial<TaskContext> = {}): TaskContext {
     dataInterval: { start: new Date('2026-10-05T06:00:00Z'), end: new Date('2026-10-06T06:00:00Z') },
     params: {},
     signal: new AbortController().signal,
+    logger: { log: () => undefined, warn: () => undefined, error: () => undefined },
     output: () => undefined,
     ...overrides,
   };

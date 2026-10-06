@@ -4,7 +4,7 @@ import type { TaskName, TaskOutput } from './task.decorator.js';
 export const TASK_PARAMS = Symbol('airnest:task-params');
 
 export type TaskParam =
-  | { index: number; kind: 'context' | 'logical-date' | 'data-interval' }
+  | { index: number; kind: 'context' | 'logical-date' | 'data-interval' | 'logger' }
   | { index: number; kind: 'params'; name?: string }
   | { index: number; kind: 'output'; taskId: string };
 
@@ -26,6 +26,7 @@ export type DataInterval = Interval;
 export const Ctx = () => taskParam({ kind: 'context' });
 export const LogicalDate = () => taskParam({ kind: 'logical-date' });
 export const DataInterval = () => taskParam({ kind: 'data-interval' });
+export const TaskLog = () => taskParam({ kind: 'logger' });
 export const Params = (name?: string) => taskParam({ kind: 'params', name });
 export const Output = (taskId: string) => taskParam({ kind: 'output', taskId });
 
@@ -37,6 +38,8 @@ export function resolveTaskParam(param: TaskParam, ctx: TaskContext) {
       return ctx.logicalDate;
     case 'data-interval':
       return ctx.dataInterval;
+    case 'logger':
+      return ctx.logger;
     case 'params':
       return param.name ? ctx.params[param.name] : ctx.params;
     case 'output':

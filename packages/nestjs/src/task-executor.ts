@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { TaskContext } from '@airnest/core';
 import { PostgresDagStore, type ClaimedTask } from '@airnest/postgres';
 import { AIRNEST_OPTIONS, type AirnestModuleOptions } from './airnest.module-definition.js';
+import { AttemptLog } from './attempt-log.js';
 import { DagRegistry } from './dag.registry.js';
 import { resolveSettings, type AirnestSettings } from './settings.js';
 
@@ -71,6 +72,7 @@ export class TaskExecutor {
     }
 
     const outputs = await this.store.outputs(task.runId, definition.upstream);
+    const log = new AttemptLog(this.store, task, clock);
     const ctx: TaskContext = {
       dagId: task.dagId,
       runId: task.runId,
@@ -80,6 +82,7 @@ export class TaskExecutor {
       dataInterval: task.dataInterval,
       params: task.params,
       signal: controller.signal,
+      logger: log,
       output: (taskId) => {
         if (!definition.upstream.includes(taskId)) throw new Error(`${task.taskId} does not wait for ${taskId}`);
         return outputs[taskId];
@@ -93,13 +96,17 @@ export class TaskExecutor {
 
     try {
       const output = await abortable(dag.runTask(task.taskId, ctx), controller.signal);
+      await log.close();
       await this.store.succeed(task.attemptId, output, clock());
     } catch (error) {
       if (error instanceof LostLease || error instanceof WorkerShuttingDown) return;
+      log.error(describeFailure(error));
+      await log.close();
       await this.store.fail(task.attemptId, describeFailure(error), clock());
     } finally {
       stopHeartbeat();
       clearTimeout(timeout);
+      await log.close().catch(() => undefined);
     }
   }
 
