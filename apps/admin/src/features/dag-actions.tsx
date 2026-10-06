@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MoreHorizontal, Pause, Play, PlayCircle } from 'lucide-react';
+import { CalendarRange, MoreHorizontal, Pause, Play, PlayCircle } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,6 +19,7 @@ import {
 } from '@airnest/ui/components/dropdown-menu';
 import { useDagActions, useManifest } from '@/lib/queries';
 import type { DagManifest } from '@/lib/types';
+import { BackfillDialog } from './backfill-dialog';
 import { TriggerDialog } from './trigger-dialog';
 
 type DagActionsProps = { dag: DagManifest; isPaused: boolean; layout: 'menu' | 'buttons' };
@@ -28,6 +29,8 @@ export function DagActions({ dag, isPaused, layout }: DagActionsProps) {
   const { pause, unpause } = useDagActions(dag.id);
   const [triggering, setTriggering] = useState(false);
   const [confirmingPause, setConfirmingPause] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const canBackfill = dag.schedule !== null;
   const actions = manifest.data?.entities.find((entity) => entity.slug === 'dags')?.actions ?? [];
   const labelOf = (name: string) => actions.find((action) => action.name === name)?.label ?? name;
   const pauseConfirmation = actions.find((action) => action.name === 'pause')?.confirm;
@@ -37,7 +40,13 @@ export function DagActions({ dag, isPaused, layout }: DagActionsProps) {
   return (
     <>
       {layout === 'buttons' ? (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {canBackfill && (
+            <Button variant="outline" onClick={() => setBackfilling(true)}>
+              <CalendarRange data-icon="inline-start" />
+              {labelOf('backfill')}
+            </Button>
+          )}
           <Button variant="outline" onClick={togglePause} disabled={pause.isPending || unpause.isPending}>
             {isPaused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
             {labelOf(isPaused ? 'unpause' : 'pause')}
@@ -66,6 +75,7 @@ export function DagActions({ dag, isPaused, layout }: DagActionsProps) {
       )}
 
       <TriggerDialog dag={dag} open={triggering} onOpenChange={setTriggering} />
+      {canBackfill && <BackfillDialog dagId={dag.id} open={backfilling} onOpenChange={setBackfilling} />}
 
       <AlertDialog open={confirmingPause} onOpenChange={setConfirmingPause}>
         <AlertDialogContent>

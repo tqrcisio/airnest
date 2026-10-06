@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import type { Attempt, Dag, Manifest, Run } from './types';
+import type { Attempt, Dag, LogLine, Manifest, Pool, Run } from './types';
 
 const liveRefreshMs = 3000;
 
@@ -53,4 +53,36 @@ export function useDagActions(dagId: string) {
     onSuccess: refresh,
   });
   return { trigger, pause, unpause };
+}
+
+export const useLogs = (runId: string, taskId: string | null, live: boolean) =>
+  useQuery({
+    queryKey: ['runs', runId, 'logs', taskId],
+    queryFn: () => api<LogLine[]>(`/runs/${runId}/tasks/${taskId}/logs`),
+    enabled: taskId !== null,
+    refetchInterval: live ? 2000 : false,
+  });
+
+export const usePools = () =>
+  useQuery({ queryKey: ['pools'], queryFn: () => api<Pool[]>('/pools'), refetchInterval: liveRefreshMs });
+
+export function useRunActions(runId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { taskIds?: string[]; downstream?: boolean; onlyFailed?: boolean }) =>
+      api<{ cleared: string[] }>(`/runs/${runId}/clear`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runs', runId] }),
+  });
+}
+
+export function useBackfill(dagId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (range: { from: string; to: string }) =>
+      api<{ created: string[]; skipped: number }>(`/dags/${dagId}/backfills`, {
+        method: 'POST',
+        body: JSON.stringify(range),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dags', dagId] }),
+  });
 }

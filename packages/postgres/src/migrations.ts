@@ -93,6 +93,7 @@ const migrations: string[][] = [
       updated_at timestamptz not null default now()
     )`,
     `alter table airnest.task_instance add column pool text`,
+    `alter table airnest.task_instance add column tries_before_clear integer not null default 0`,
     `create index task_instance_pool_running on airnest.task_instance (pool) where state = 'running' and pool is not null`,
     `create table airnest.task_log (
       seq bigserial primary key,

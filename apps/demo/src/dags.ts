@@ -1,4 +1,5 @@
-import { Ctx, Dag, DataInterval, Output, Params, Task, type DagContext } from '@airnest/nestjs';
+import { Ctx, Dag, DataInterval, Output, Params, Task, TaskLog, type DagContext } from '@airnest/nestjs';
+import type { TaskLogger } from '@airnest/core';
 import { failSometimes, work } from './chaos.js';
 
 const hour = 60 * 60_000;
@@ -19,7 +20,9 @@ type Sale = { branch: number; total: number };
 export class SalesDailyDag {
   @Task()
   async extract(@DataInterval() interval: DataInterval, @Ctx() ctx: DagContext) {
+    ctx.logger.log(`reading sales from ${interval.start.toISOString()} to ${interval.end.toISOString()}`);
     await work(300, 1200, ctx.signal);
+    ctx.logger.log('3 branches fetched');
     failSometimes(0.1, 'source database refused the connection');
     return [1, 2, 3].map((branch) => ({ branch, total: interval.end.getUTCMinutes() * branch }));
   }
@@ -30,8 +33,9 @@ export class SalesDailyDag {
     return sales.map((sale) => ({ ...sale, total: Math.round(sale.total * 1.1) }));
   }
 
-  @Task({ after: ['transform'] })
-  async load(@Output('transform') sales: Sale[]) {
+  @Task({ after: ['transform'], pool: 'warehouse' })
+  async load(@Output('transform') sales: Sale[], @TaskLog() log: TaskLogger) {
+    log.log(`upserting ${sales.length} rows`);
     await work(300, 900);
     failSometimes(0.15, 'warehouse lock timeout');
     return { rows: sales.length };
@@ -58,7 +62,8 @@ export class InvoicesDag {
   }
 
   @Task({ after: ['fetch_customers'] })
-  async charge_card(@Output('fetch_customers') customers: string[]) {
+  async charge_card(@Output('fetch_customers') customers: string[], @TaskLog() log: TaskLogger) {
+    for (const customer of customers) log.log(`charging ${customer}`);
     await work(500, 1500);
     failSometimes(0.3, 'card processor returned 503');
     return customers.length;

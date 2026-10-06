@@ -21,6 +21,13 @@ function Shell() {
             >
               DAGs
             </Link>
+            <Link
+              to="/pools"
+              className="rounded-full px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              activeProps={{ className: 'bg-muted text-foreground' }}
+            >
+              Pools
+            </Link>
           </nav>
           <Button
             variant="ghost"

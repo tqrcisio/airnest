@@ -37,6 +37,8 @@ function tally(upstream: readonly TaskState[]): UpstreamTally {
 
 const ready: TriggerVerdict = { outcome: 'ready' };
 
+const upstreamTasks = (count: number) => `${count} upstream ${count === 1 ? 'task' : 'tasks'}`;
+
 function waiting(t: UpstreamTally): TriggerVerdict {
   return { outcome: 'waiting', reason: `${t.total - t.done} of ${t.total} upstream tasks still running` };
 }
@@ -49,8 +51,12 @@ export function evaluateTriggerRule(rule: TriggerRule, upstream: readonly TaskSt
 
   switch (rule) {
     case 'all_success':
-      if (t.failed > 0) return { outcome: 'upstream_failed', reason: `${t.failed} upstream tasks failed` };
-      if (t.skipped > 0) return { outcome: 'skipped', reason: `${t.skipped} upstream tasks were skipped` };
+      if (t.failed > 0) return { outcome: 'upstream_failed', reason: `${upstreamTasks(t.failed)} failed` };
+      if (t.skipped > 0)
+        return {
+          outcome: 'skipped',
+          reason: `${upstreamTasks(t.skipped)} ${t.skipped === 1 ? 'was' : 'were'} skipped`,
+        };
       return allDone ? ready : waiting(t);
 
     case 'all_failed':
@@ -72,11 +78,11 @@ export function evaluateTriggerRule(rule: TriggerRule, upstream: readonly TaskSt
       return allDone ? { outcome: 'skipped', reason: 'no upstream task failed' } : waiting(t);
 
     case 'none_failed':
-      if (t.failed > 0) return { outcome: 'upstream_failed', reason: `${t.failed} upstream tasks failed` };
+      if (t.failed > 0) return { outcome: 'upstream_failed', reason: `${upstreamTasks(t.failed)} failed` };
       return allDone ? ready : waiting(t);
 
     case 'none_failed_min_one_success':
-      if (t.failed > 0) return { outcome: 'upstream_failed', reason: `${t.failed} upstream tasks failed` };
+      if (t.failed > 0) return { outcome: 'upstream_failed', reason: `${upstreamTasks(t.failed)} failed` };
       if (!allDone) return waiting(t);
       return t.success > 0 ? ready : { outcome: 'skipped', reason: 'every upstream task was skipped' };
   }

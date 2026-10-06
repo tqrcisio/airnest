@@ -63,6 +63,25 @@ describe('clearing a run', () => {
   });
 });
 
+describe('retries after clearing', () => {
+  it('gives a cleared task its full retry budget again', async () => {
+    const flaky = dag('flaky', task('extract', [], { retries: 1, retryDelayMs: 0 }));
+    const { store } = await storeWith(flaky);
+    const runId = (await store.createRun(dailyRun('flaky'), clock.start))!;
+    await drain(store, () => 'fail');
+    expect((await store.attempts(runId, 'extract')).map((a) => a.state)).toEqual(['up_for_retry', 'failed']);
+
+    await store.clearRun(runId, {}, clock.start);
+    await drain(store, () => 'fail');
+    expect((await store.attempts(runId, 'extract')).map((a) => [a.tryNumber, a.state])).toEqual([
+      [1, 'up_for_retry'],
+      [2, 'failed'],
+      [3, 'up_for_retry'],
+      [4, 'failed'],
+    ]);
+  });
+});
+
 describe('backfill', () => {
   const hourly = {
     ...dag('hourly', task('extract')),

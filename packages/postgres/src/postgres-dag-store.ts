@@ -141,6 +141,7 @@ type RunningAttemptRow = {
   run_id: string;
   task_id: string;
   try_number: number;
+  tries_before_clear?: number;
   worker_id: string;
   started_at: Date;
   dag_id: string;
@@ -324,7 +325,7 @@ export class PostgresDagStore {
       await tx.query(
         `update airnest.task_instance
          set state = 'pending', reason = null, last_error = null, retry_at = null, lease_expires_at = null,
-             finished_at = null, updated_at = $3
+             finished_at = null, tries_before_clear = try_number, updated_at = $3
          where run_id = $1 and task_id = any($2::text[])`,
         [runId, cleared, now],
       );
@@ -633,7 +634,7 @@ export class PostgresDagStore {
   async fail(attemptId: string, error: string, now: Date) {
     return this.db.transaction(async (tx) => {
       const { rows } = await tx.query<RunningAttemptRow>(
-        `select ti.run_id, ti.task_id, ti.try_number, ti.worker_id, ti.started_at, r.dag_id, r.dag_version
+        `select ti.run_id, ti.task_id, ti.try_number, ti.tries_before_clear, ti.worker_id, ti.started_at, r.dag_id, r.dag_version
          from airnest.task_instance ti join airnest.dag_run r using (run_id)
          where ti.attempt_id = $1 and ti.state = 'running'
          for update of ti`,
@@ -644,7 +645,7 @@ export class PostgresDagStore {
 
       const definition = await this.definition(tx, attempt.dag_id, attempt.dag_version);
       const task = definition.tasks.find((candidate) => candidate.id === attempt.task_id)!;
-      const retrying = canRetry(task, attempt.try_number);
+      const retrying = canRetry(task, attempt.try_number - (attempt.tries_before_clear ?? 0));
       const retryAt = retrying
         ? new Date(
             now.getTime() +

@@ -11,7 +11,13 @@ const port = Number(process.env.AIRNEST_DEMO_PORT ?? 3100);
 
 @Module({
   imports: [
-    AirnestModule.forRoot({ db, worker: { concurrency: 6, pollMs: 200 }, scheduler: { pollMs: 500 } }),
+    AirnestModule.forRoot({
+      db,
+      worker: { concurrency: 6, pollMs: 200 },
+      scheduler: { pollMs: 500 },
+      pools: { warehouse: { slots: 1, description: 'Warehouse writes' } },
+      retention: { days: 30 },
+    }),
     AirnestControlPlaneModule.forRoot({
       db,
       authorize: () => true,

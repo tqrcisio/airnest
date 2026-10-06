@@ -2,6 +2,8 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { Loader2 } from 'lucide-react';
 import { Crumbs, PageState, SectionHeading } from '@/features/crumbs';
 import { Attempts } from '@/features/attempts';
+import { RerunTaskButton, RunActions, isTaskActive } from '@/features/run-actions';
+import { TaskLogs } from '@/features/task-logs';
 import { DagGraph } from '@/features/dag-graph';
 import { formatDateTime } from '@/lib/format';
 import { useManifest, useRun } from '@/lib/queries';
@@ -51,9 +53,14 @@ function RunPage() {
     <div className="space-y-8">
       {crumbs(formatDateTime(run.data.logicalDate))}
       <header className="space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight tabular-nums">{formatDateTime(run.data.logicalDate)}</h1>
-          <StateBadge field={fieldOf(runsEntity, 'state')} value={run.data.state} />
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-3xl font-semibold tracking-tight tabular-nums">
+              {formatDateTime(run.data.logicalDate)}
+            </h1>
+            <StateBadge field={fieldOf(runsEntity, 'state')} value={run.data.state} />
+          </div>
+          <RunActions run={run.data} entity={runsEntity} />
         </div>
         <dl className="grid gap-x-8 gap-y-2 text-sm sm:grid-cols-[max-content_1fr]">
           {detailFields
@@ -95,6 +102,14 @@ function RunPage() {
               {content}
             </button>
           )}
+          actions={(task) => (
+            <RerunTaskButton
+              runId={runId}
+              taskId={task.taskId}
+              state={task.state}
+              label={tasksEntity.actions.find((action) => action.name === 'clear')?.label ?? 'Rerun'}
+            />
+          )}
         />
       </section>
 
@@ -102,6 +117,17 @@ function RunPage() {
         <section className="space-y-3">
           <SectionHeading>{`Attempts of ${selectedTask}`}</SectionHeading>
           <Attempts runId={runId} taskId={selectedTask} />
+        </section>
+      )}
+
+      {selectedTask && (
+        <section className="space-y-3">
+          <SectionHeading>{`Logs of ${selectedTask}`}</SectionHeading>
+          <TaskLogs
+            runId={runId}
+            taskId={selectedTask}
+            live={isTaskActive(run.data.tasks.find((task) => task.taskId === selectedTask)?.state ?? '')}
+          />
         </section>
       )}
     </div>

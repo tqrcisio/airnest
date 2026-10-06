@@ -93,6 +93,9 @@ importers:
       '@airnest/control-plane':
         specifier: workspace:*
         version: link:../../packages/control-plane
+      '@airnest/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@airnest/nestjs':
         specifier: workspace:*
         version: link:../../packages/nestjs

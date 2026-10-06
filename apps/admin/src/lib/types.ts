@@ -60,3 +60,7 @@ export type Attempt = {
 export type DagRow = Dag & { schedule: string | null };
 
 export type EntitySlug = Manifest['entities'][number]['slug'];
+
+export type LogLine = { seq: number; tryNumber: number; level: 'log' | 'warn' | 'error'; message: string; at: string };
+
+export type Pool = { name: string; slots: number; running: number; queued: number; description: string | null };

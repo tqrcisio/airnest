@@ -70,7 +70,7 @@ describe('PostgresDagStore', () => {
     const { rows: tasks } = await db.query('select task_id, state, reason from airnest.task_instance order by task_id');
     expect(tasks).toEqual([
       { task_id: 'extract', state: 'failed', reason: null },
-      { task_id: 'load', state: 'upstream_failed', reason: '1 upstream tasks failed' },
+      { task_id: 'load', state: 'upstream_failed', reason: '1 upstream task failed' },
     ]);
     const { rows: attempts } = await db.query(
       'select try_number, worker_id, state, error from airnest.task_attempt order by try_number',
