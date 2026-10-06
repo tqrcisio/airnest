@@ -55,6 +55,9 @@ pnpm typecheck
 pnpm lint
 ```
 
+Os testes do `@airnest/postgres` rodam em PGlite. Os de concorrência precisam de um PostgreSQL de verdade e só
+rodam com `SQL_TEST_PG_URL` apontando para ele (cada execução cria e apaga o próprio banco).
+
 ## Licença
 
 MIT
