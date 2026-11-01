@@ -4,19 +4,22 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Field, FieldGroup, FieldLabel } from '@airnest/ui/components/field';
 import { Input } from '@airnest/ui/components/input';
 import { useBackfill } from '@/lib/queries';
+import type { DagManifest } from '@/lib/types';
+import { PartitionSelect } from './partition-select';
 
-type BackfillDialogProps = { dagId: string; open: boolean; onOpenChange: (open: boolean) => void };
+type BackfillDialogProps = { dag: DagManifest; open: boolean; onOpenChange: (open: boolean) => void };
 
 const toIso = (local: string) => new Date(local).toISOString();
 
-export function BackfillDialog({ dagId, open, onOpenChange }: BackfillDialogProps) {
-  const backfill = useBackfill(dagId);
+export function BackfillDialog({ dag, open, onOpenChange }: BackfillDialogProps) {
+  const backfill = useBackfill(dag.id);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [partition, setPartition] = useState('');
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    await backfill.mutateAsync({ from: toIso(from), to: toIso(to) });
+    await backfill.mutateAsync({ from: toIso(from), to: toIso(to), partition: partition || undefined });
   };
 
   const close = (next: boolean) => {
@@ -28,7 +31,7 @@ export function BackfillDialog({ dagId, open, onOpenChange }: BackfillDialogProp
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Backfill {dagId}</DialogTitle>
+          <DialogTitle>Backfill {dag.id}</DialogTitle>
         </DialogHeader>
         {backfill.data ? (
           <p className="text-sm">
@@ -38,6 +41,18 @@ export function BackfillDialog({ dagId, open, onOpenChange }: BackfillDialogProp
         ) : (
           <form id="backfill-form" onSubmit={submit}>
             <FieldGroup>
+              {dag.partitions && (
+                <Field>
+                  <FieldLabel htmlFor="backfill-partition">Partition</FieldLabel>
+                  <PartitionSelect
+                    id="backfill-partition"
+                    partitions={dag.partitions}
+                    value={partition}
+                    onChange={setPartition}
+                    allLabel="All partitions"
+                  />
+                </Field>
+              )}
               <Field>
                 <FieldLabel htmlFor="backfill-from">From</FieldLabel>
                 <Input

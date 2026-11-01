@@ -75,7 +75,7 @@ export function DagActions({ dag, isPaused, layout }: DagActionsProps) {
       )}
 
       <TriggerDialog dag={dag} open={triggering} onOpenChange={setTriggering} />
-      {canBackfill && <BackfillDialog dagId={dag.id} open={backfilling} onOpenChange={setBackfilling} />}
+      {canBackfill && <BackfillDialog dag={dag} open={backfilling} onOpenChange={setBackfilling} />}
 
       <AlertDialog open={confirmingPause} onOpenChange={setConfirmingPause}>
         <AlertDialogContent>

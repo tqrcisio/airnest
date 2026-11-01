@@ -20,6 +20,7 @@ export type RunType = 'scheduled' | 'manual' | 'backfill';
 
 export type NewRun = {
   dagId: string;
+  partitionKey?: string;
   logicalDate: Date;
   dataInterval: DataInterval;
   runType: RunType;
@@ -31,6 +32,7 @@ export type ClaimedTask = {
   attemptId: string;
   runId: string;
   dagId: string;
+  partitionKey: string;
   taskId: string;
   tryNumber: number;
   logicalDate: Date;
@@ -38,6 +40,25 @@ export type ClaimedTask = {
   params: Record<string, unknown>;
   leaseExpiresAt: Date;
 };
+
+export class UnknownPartitionError extends Error {
+  constructor(
+    readonly dagId: string,
+    readonly partitionKey: string,
+  ) {
+    super(
+      partitionKey === ''
+        ? `DAG ${dagId} is partitioned; choose one of its partitions`
+        : `DAG ${dagId} has no active partition ${partitionKey}`,
+    );
+  }
+}
+
+export type PartitionInput = { key: string; label?: string };
+
+export type PartitionSummary = { key: string; label: string | null };
+
+export type PartitionSync = { activated: string[]; deactivated: string[] };
 
 export class TaskStillActiveError extends Error {
   constructor(readonly taskIds: string[]) {
@@ -52,7 +73,7 @@ export type ClearOptions = {
   clearedBy?: string;
 };
 
-export type BackfillOptions = { params?: Record<string, unknown>; triggeredBy?: string };
+export type BackfillOptions = { params?: Record<string, unknown>; triggeredBy?: string; partitionKey?: string };
 
 export type LogLevel = 'log' | 'warn' | 'error';
 
@@ -73,7 +94,10 @@ export type FinishedRun = { runId: string; dagId: string; state: RunState; reaso
 
 export type AdvanceReport = { queued: number; finished: FinishedRun[] };
 
-export type SchedulingReport = { created: { runId: string; dagId: string; logicalDate: Date }[]; stalled: string[] };
+export type SchedulingReport = {
+  created: { runId: string; dagId: string; partitionKey: string; logicalDate: Date }[];
+  stalled: string[];
+};
 
 export type TaskSummary = {
   taskId: string;
@@ -92,6 +116,7 @@ export type DagSummary = {
   nextRunAfter: Date | null;
   lastLogicalDate: Date | null;
   lastRunState: RunState | null;
+  partitions: PartitionSummary[];
 };
 
 export type AttemptSummary = {
@@ -107,9 +132,14 @@ export type AttemptSummary = {
 export type RunSummary = {
   runId: string;
   dagId: string;
+  partitionKey: string;
   runType: RunType;
   state: RunState;
   logicalDate: Date;
+  dataInterval: DataInterval;
+  params: Record<string, unknown>;
+  startedAt: Date | null;
+  finishedAt: Date | null;
   failureReason: string | null;
   triggeredBy: string | null;
   tasks: TaskSummary[];
@@ -124,18 +154,30 @@ type DagRow = {
   next_run_after: Date | null;
   last_logical_date: Date | null;
   last_run_state: RunState | null;
+  partitions: PartitionSummary[];
 };
 type RunListRow = {
   run_id: string;
   dag_id: string;
+  partition_key: string;
   run_type: RunType;
   state: RunState;
   logical_date: Date;
+  data_interval_start: Date;
+  data_interval_end: Date;
+  params: Record<string, unknown>;
+  started_at: Date | null;
+  finished_at: Date | null;
   failure_reason: string | null;
   triggered_by: string | null;
 };
-type DueDagRow = { dag_id: string; latest_version: string; last_logical_date: Date | null };
-type RunRow = { run_id: string; dag_id: string; dag_version: string; state: RunState };
+type DuePartitionRow = {
+  dag_id: string;
+  partition_key: string;
+  latest_version: string;
+  last_logical_date: Date | null;
+};
+type RunRow = { run_id: string; dag_id: string; partition_key: string; dag_version: string; state: RunState };
 type TaskRow = { task_id: string; state: TaskState; retry_at: Date | null };
 type RunningAttemptRow = {
   run_id: string;
@@ -157,10 +199,9 @@ export class PostgresDagStore {
 
   async registerDag(definition: DagDefinition, version: string, now: Date) {
     await this.db.transaction(async (tx) => {
-      const { rows } = await tx.query<{ last_logical_date: Date | null }>(
+      await tx.query(
         `insert into airnest.dag (dag_id, latest_version, created_at, updated_at) values ($1, $2, $3, $3)
-         on conflict (dag_id) do update set latest_version = excluded.latest_version, updated_at = excluded.updated_at
-         returning last_logical_date`,
+         on conflict (dag_id) do update set latest_version = excluded.latest_version, updated_at = excluded.updated_at`,
         [definition.id, version, now],
       );
       await tx.query(
@@ -168,47 +209,145 @@ export class PostgresDagStore {
          on conflict do nothing`,
         [definition.id, version, JSON.stringify(definition), now],
       );
-      const next = nextScheduledRun(definition, rows[0].last_logical_date, now);
-      await tx.query('update airnest.dag set next_run_after = $2 where dag_id = $1', [
-        definition.id,
-        next?.logicalDate ?? null,
-      ]);
+      if (definition.partitioned) {
+        await tx.query(
+          `update airnest.dag_partition set is_active = false, next_run_after = null, updated_at = $2
+           where dag_id = $1 and partition_key = ''`,
+          [definition.id, now],
+        );
+      } else {
+        await this.upsertPartitions(tx, definition.id, [{ key: '' }], now);
+      }
+      const { rows: active } = await tx.query<{ partition_key: string; last_logical_date: Date | null }>(
+        'select partition_key, last_logical_date from airnest.dag_partition where dag_id = $1 and is_active',
+        [definition.id],
+      );
+      for (const partition of active) await this.reschedulePartition(tx, definition, partition, now);
     });
+  }
+
+  async syncPartitions(dagId: string, partitions: PartitionInput[], now: Date): Promise<PartitionSync> {
+    const blank = partitions.filter((partition) => partition.key === '');
+    if (blank.length > 0) throw new Error(`DAG ${dagId} got an empty partition key`);
+    return this.db.transaction(async (tx) => {
+      const definition = await this.definition(tx, dagId, await this.latestVersion(tx, dagId));
+      if (!definition.partitioned) throw new Error(`DAG ${dagId} is not partitioned`);
+      const { rows: deactivated } = await tx.query<{ partition_key: string }>(
+        `update airnest.dag_partition set is_active = false, next_run_after = null, updated_at = $3
+         where dag_id = $1 and is_active and partition_key <> all($2::text[])
+         returning partition_key`,
+        [dagId, partitions.map((partition) => partition.key), now],
+      );
+      const activated = await this.upsertPartitions(tx, dagId, partitions, now);
+      for (const partition of activated) await this.reschedulePartition(tx, definition, partition, now);
+      return {
+        activated: activated.map((partition) => partition.partition_key),
+        deactivated: deactivated.map((partition) => partition.partition_key),
+      };
+    });
+  }
+
+  private async upsertPartitions(tx: Queryable, dagId: string, partitions: PartitionInput[], now: Date) {
+    const { rows } = await tx.query<{ partition_key: string; last_logical_date: Date | null; activated: boolean }>(
+      `with previously_active as (
+         select partition_key from airnest.dag_partition
+         where dag_id = $1 and is_active and partition_key = any($2::text[])
+       )
+       insert into airnest.dag_partition (dag_id, partition_key, label, created_at, updated_at)
+       select $1, incoming.key, incoming.label, $4, $4 from unnest($2::text[], $3::text[]) as incoming(key, label)
+       on conflict (dag_id, partition_key) do update
+         set label = excluded.label, is_active = true, updated_at = excluded.updated_at
+       returning partition_key, last_logical_date,
+         partition_key not in (select partition_key from previously_active) as activated`,
+      [
+        dagId,
+        partitions.map((partition) => partition.key),
+        partitions.map((partition) => partition.label ?? null),
+        now,
+      ],
+    );
+    return rows.filter((row) => row.activated);
+  }
+
+  private async reschedulePartition(
+    tx: Queryable,
+    definition: DagDefinition,
+    partition: { partition_key: string; last_logical_date: Date | null },
+    now: Date,
+  ) {
+    const next = nextScheduledRun(definition, partition.last_logical_date, now);
+    await tx.query('update airnest.dag_partition set next_run_after = $3 where dag_id = $1 and partition_key = $2', [
+      definition.id,
+      partition.partition_key,
+      next?.logicalDate ?? null,
+    ]);
+  }
+
+  private async assertActivePartition(tx: Queryable, dagId: string, partitionKey: string) {
+    const { rows } = await tx.query(
+      'select 1 from airnest.dag_partition where dag_id = $1 and partition_key = $2 and is_active',
+      [dagId, partitionKey],
+    );
+    if (rows.length === 0) throw new UnknownPartitionError(dagId, partitionKey);
+  }
+
+  async partitions(dagId: string): Promise<PartitionSummary[]> {
+    const { rows } = await this.db.query<PartitionSummary>(
+      `select partition_key as key, label from airnest.dag_partition
+       where dag_id = $1 and is_active and partition_key <> '' order by coalesce(label, partition_key)`,
+      [dagId],
+    );
+    return rows;
   }
 
   async createRun(run: NewRun, now: Date): Promise<string | null> {
     return this.db.transaction(async (tx) => {
-      return this.insertRun(tx, run, await this.latestVersion(tx, run.dagId), now);
+      const version = await this.latestVersion(tx, run.dagId);
+      await this.assertActivePartition(tx, run.dagId, run.partitionKey ?? '');
+      return this.insertRun(tx, run, version, now);
     });
   }
 
   async createDueRuns(now: Date, limit = 50, maxRunsPerDag = 10): Promise<SchedulingReport> {
     return this.db.transaction(async (tx) => {
-      const { rows: due } = await tx.query<DueDagRow>(
-        `select dag_id, latest_version, last_logical_date from airnest.dag
-         where not is_paused and next_run_after <= $1
-         order by next_run_after limit $2 for update skip locked`,
+      const { rows: due } = await tx.query<DuePartitionRow>(
+        `select p.dag_id, p.partition_key, d.latest_version, p.last_logical_date
+         from airnest.dag_partition p join airnest.dag d using (dag_id)
+         where p.is_active and not d.is_paused and p.next_run_after <= $1
+         order by p.next_run_after limit $2 for update of p skip locked`,
         [now, limit],
       );
       const report: SchedulingReport = { created: [], stalled: [] };
-      for (const dag of due) {
+      for (const partition of due) {
         try {
-          await this.createDueRunsOf(tx, dag, now, maxRunsPerDag, report);
+          await this.createDueRunsOf(tx, partition, now, maxRunsPerDag, report);
         } catch (error) {
           if (!(error instanceof ScheduleStalledError || error instanceof InvalidParamsError)) throw error;
-          await tx.query('update airnest.dag set next_run_after = null where dag_id = $1', [dag.dag_id]);
-          report.stalled.push(dag.dag_id);
+          await tx.query(
+            'update airnest.dag_partition set next_run_after = null where dag_id = $1 and partition_key = $2',
+            [partition.dag_id, partition.partition_key],
+          );
+          report.stalled.push(
+            partition.partition_key ? `${partition.dag_id}[${partition.partition_key}]` : partition.dag_id,
+          );
         }
       }
       return report;
     });
   }
 
-  private async createDueRunsOf(tx: Queryable, dag: DueDagRow, now: Date, maxRuns: number, report: SchedulingReport) {
+  private async createDueRunsOf(
+    tx: Queryable,
+    dag: DuePartitionRow,
+    now: Date,
+    maxRuns: number,
+    report: SchedulingReport,
+  ) {
     const definition = await this.definition(tx, dag.dag_id, dag.latest_version);
     const { rows: active } = await tx.query<{ count: number }>(
-      `select count(*)::int as count from airnest.dag_run where dag_id = $1 and state in ('queued', 'running')`,
-      [dag.dag_id],
+      `select count(*)::int as count from airnest.dag_run
+       where dag_id = $1 and partition_key = $2 and state in ('queued', 'running')`,
+      [dag.dag_id, dag.partition_key],
     );
     let slots = Math.min(maxRuns, definition.maxActiveRuns - active[0].count);
     let last = dag.last_logical_date;
@@ -217,19 +356,33 @@ export class PostgresDagStore {
     while (slots > 0 && next && next.logicalDate <= now) {
       const runId = await this.insertRun(
         tx,
-        { dagId: dag.dag_id, logicalDate: next.logicalDate, dataInterval: next.dataInterval, runType: 'scheduled' },
+        {
+          dagId: dag.dag_id,
+          partitionKey: dag.partition_key,
+          logicalDate: next.logicalDate,
+          dataInterval: next.dataInterval,
+          runType: 'scheduled',
+        },
         dag.latest_version,
         now,
       );
-      if (runId) report.created.push({ runId, dagId: dag.dag_id, logicalDate: next.logicalDate });
+      if (runId) {
+        report.created.push({
+          runId,
+          dagId: dag.dag_id,
+          partitionKey: dag.partition_key,
+          logicalDate: next.logicalDate,
+        });
+      }
       last = next.logicalDate;
       next = nextScheduledRun(definition, last, now);
       slots--;
     }
 
     await tx.query(
-      'update airnest.dag set last_logical_date = $2, next_run_after = $3, updated_at = $4 where dag_id = $1',
-      [dag.dag_id, last, next?.logicalDate ?? null, now],
+      `update airnest.dag_partition set last_logical_date = $3, next_run_after = $4, updated_at = $5
+       where dag_id = $1 and partition_key = $2`,
+      [dag.dag_id, dag.partition_key, last, next?.logicalDate ?? null, now],
     );
   }
 
@@ -238,9 +391,9 @@ export class PostgresDagStore {
     const params = resolveParams(definition.params, run.params);
     const { rows: created } = await tx.query<{ run_id: string }>(
       `insert into airnest.dag_run (dag_id, dag_version, logical_date, data_interval_start, data_interval_end,
-         run_type, state, params, triggered_by, created_at, updated_at)
-       values ($1, $2, $3, $4, $5, $6, 'queued', $7::jsonb, $8, $9, $9)
-       on conflict (dag_id, logical_date) do nothing
+         run_type, state, params, triggered_by, created_at, updated_at, partition_key)
+       values ($1, $2, $3, $4, $5, $6, 'queued', $7::jsonb, $8, $9, $9, $10)
+       on conflict (dag_id, partition_key, logical_date) do nothing
        returning run_id`,
       [
         run.dagId,
@@ -252,6 +405,7 @@ export class PostgresDagStore {
         JSON.stringify(params),
         run.triggeredBy ?? null,
         now,
+        run.partitionKey ?? '',
       ],
     );
     if (created.length === 0) return null;
@@ -269,33 +423,50 @@ export class PostgresDagStore {
     return this.db.transaction(async (tx) => {
       const version = await this.latestVersion(tx, dagId);
       const definition = await this.definition(tx, dagId, version);
+      const partitionKeys = await this.backfillPartitions(tx, dagId, options.partitionKey);
       const created: string[] = [];
       let skipped = 0;
-      for (const { logicalDate, dataInterval } of scheduledRunsBetween(definition, from, to)) {
-        const runId = await this.insertRun(
-          tx,
-          {
-            dagId,
-            logicalDate,
-            dataInterval,
-            runType: 'backfill',
-            params: options.params,
-            triggeredBy: options.triggeredBy,
-          },
-          version,
-          now,
-        );
-        if (runId) created.push(runId);
-        else skipped++;
+      const intervals = scheduledRunsBetween(definition, from, to);
+      for (const partitionKey of partitionKeys) {
+        for (const { logicalDate, dataInterval } of intervals) {
+          const runId = await this.insertRun(
+            tx,
+            {
+              dagId,
+              partitionKey,
+              logicalDate,
+              dataInterval,
+              runType: 'backfill',
+              params: options.params,
+              triggeredBy: options.triggeredBy,
+            },
+            version,
+            now,
+          );
+          if (runId) created.push(runId);
+          else skipped++;
+        }
       }
       return { created, skipped };
     });
   }
 
+  private async backfillPartitions(tx: Queryable, dagId: string, partitionKey: string | undefined) {
+    if (partitionKey !== undefined) {
+      await this.assertActivePartition(tx, dagId, partitionKey);
+      return [partitionKey];
+    }
+    const { rows } = await tx.query<{ partition_key: string }>(
+      'select partition_key from airnest.dag_partition where dag_id = $1 and is_active order by partition_key',
+      [dagId],
+    );
+    return rows.map((row) => row.partition_key);
+  }
+
   async clearRun(runId: string, options: ClearOptions, now: Date): Promise<string[] | null> {
     return this.db.transaction(async (tx) => {
       const { rows: runs } = await tx.query<RunRow>(
-        'select run_id, dag_id, dag_version, state from airnest.dag_run where run_id = $1 for update',
+        'select run_id, dag_id, partition_key, dag_version, state from airnest.dag_run where run_id = $1 for update',
         [runId],
       );
       if (runs.length === 0) return null;
@@ -343,7 +514,7 @@ export class PostgresDagStore {
   async advanceRuns(now: Date, limit = 50): Promise<AdvanceReport> {
     return this.db.transaction(async (tx) => {
       const { rows: runs } = await tx.query<RunRow>(
-        `select run_id, dag_id, dag_version, state from airnest.dag_run
+        `select run_id, dag_id, partition_key, dag_version, state from airnest.dag_run
          where state in ('queued', 'running') order by logical_date limit $1 for update skip locked`,
         [limit],
       );
@@ -358,7 +529,7 @@ export class PostgresDagStore {
 
   private async advanceRun(tx: Queryable, run: RunRow, now: Date, report: AdvanceReport) {
     const definition = await this.definition(tx, run.dag_id, run.dag_version);
-    if (run.state === 'queued' && !(await this.hasRunningSlot(tx, run.dag_id, definition.maxActiveRuns))) return null;
+    if (run.state === 'queued' && !(await this.hasRunningSlot(tx, run, definition.maxActiveRuns))) return null;
     const { rows: tasks } = await tx.query<TaskRow>(
       'select task_id, state, retry_at from airnest.task_instance where run_id = $1',
       [run.run_id],
@@ -409,11 +580,15 @@ export class PostgresDagStore {
     return { runId: run.run_id, dagId: run.dag_id, state: plan.runState, reason };
   }
 
-  private async hasRunningSlot(tx: Queryable, dagId: string, maxActiveRuns: number) {
-    await tx.query(`select pg_advisory_xact_lock(hashtext('airnest:runs:' || $1))`, [dagId]);
+  private async hasRunningSlot(tx: Queryable, run: RunRow, maxActiveRuns: number) {
+    await tx.query(`select pg_advisory_xact_lock(hashtext('airnest:runs:' || $1 || ':' || $2))`, [
+      run.dag_id,
+      run.partition_key,
+    ]);
     const { rows } = await tx.query<{ count: number }>(
-      `select count(*)::int as count from airnest.dag_run where dag_id = $1 and state = 'running'`,
-      [dagId],
+      `select count(*)::int as count from airnest.dag_run
+       where dag_id = $1 and partition_key = $2 and state = 'running'`,
+      [run.dag_id, run.partition_key],
     );
     return rows[0].count < maxActiveRuns;
   }
@@ -464,12 +639,13 @@ export class PostgresDagStore {
       const { rows: runs } = await tx.query<{
         run_id: string;
         dag_id: string;
+        partition_key: string;
         logical_date: Date;
         data_interval_start: Date;
         data_interval_end: Date;
         params: Record<string, unknown>;
       }>(
-        `select run_id, dag_id, logical_date, data_interval_start, data_interval_end, params
+        `select run_id, dag_id, partition_key, logical_date, data_interval_start, data_interval_end, params
          from airnest.dag_run where run_id = any($1::uuid[])`,
         [[...new Set(claimed.map((task) => task.run_id))]],
       );
@@ -481,6 +657,7 @@ export class PostgresDagStore {
           attemptId: task.attempt_id,
           runId: task.run_id,
           dagId: run.dag_id,
+          partitionKey: run.partition_key,
           taskId: task.task_id,
           tryNumber: task.try_number,
           logicalDate: run.logical_date,
@@ -689,10 +866,21 @@ export class PostgresDagStore {
 
   async dags(dagId?: string): Promise<DagSummary[]> {
     const { rows } = await this.db.query<DagRow>(
-      `select d.dag_id, d.latest_version, v.definition, d.is_paused, d.paused_by, d.next_run_after, d.last_logical_date,
+      `select d.dag_id, d.latest_version, v.definition, d.is_paused, d.paused_by,
+         partition_stats.next_run_after, partition_stats.last_logical_date, partition_stats.partitions,
          (select r.state from airnest.dag_run r where r.dag_id = d.dag_id order by r.logical_date desc limit 1)
            as last_run_state
-       from airnest.dag d join airnest.dag_version v on v.dag_id = d.dag_id and v.version = d.latest_version
+       from airnest.dag d
+       cross join lateral (
+         select min(p.next_run_after) as next_run_after, max(p.last_logical_date) as last_logical_date,
+           coalesce(
+             jsonb_agg(jsonb_build_object('key', p.partition_key, 'label', p.label)
+               order by coalesce(p.label, p.partition_key)) filter (where p.partition_key <> ''),
+             '[]'::jsonb
+           ) as partitions
+         from airnest.dag_partition p where p.dag_id = d.dag_id and p.is_active
+       ) partition_stats
+       join airnest.dag_version v on v.dag_id = d.dag_id and v.version = d.latest_version
        where $1::text is null or d.dag_id = $1
        order by d.dag_id`,
       [dagId ?? null],
@@ -706,6 +894,7 @@ export class PostgresDagStore {
       nextRunAfter: row.next_run_after,
       lastLogicalDate: row.last_logical_date,
       lastRunState: row.last_run_state,
+      partitions: row.partitions,
     }));
   }
 
@@ -718,19 +907,23 @@ export class PostgresDagStore {
     return rows.length > 0;
   }
 
-  async runs(dagId: string, limit = 25): Promise<RunSummary[]> {
+  async runs(dagId: string, limit = 25, partitionKey?: string): Promise<RunSummary[]> {
     const { rows } = await this.db.query<RunListRow>(
-      `select run_id, dag_id, run_type, state, logical_date, failure_reason, triggered_by from airnest.dag_run
-       where dag_id = $1 order by logical_date desc limit $2`,
-      [dagId, limit],
+      `select run_id, dag_id, partition_key, run_type, state, logical_date, data_interval_start, data_interval_end,
+         params, started_at, finished_at, failure_reason, triggered_by
+       from airnest.dag_run
+       where dag_id = $1 and ($3::text is null or partition_key = $3)
+       order by logical_date desc limit $2`,
+      [dagId, limit, partitionKey ?? null],
     );
     return this.withTasks(rows);
   }
 
   async run(runId: string): Promise<RunSummary | null> {
     const { rows } = await this.db.query<RunListRow>(
-      `select run_id, dag_id, run_type, state, logical_date, failure_reason, triggered_by from airnest.dag_run
-       where run_id = $1`,
+      `select run_id, dag_id, partition_key, run_type, state, logical_date, data_interval_start, data_interval_end,
+         params, started_at, finished_at, failure_reason, triggered_by
+       from airnest.dag_run where run_id = $1`,
       [runId],
     );
     const [run] = await this.withTasks(rows);
@@ -780,9 +973,14 @@ export class PostgresDagStore {
     return runs.map((run) => ({
       runId: run.run_id,
       dagId: run.dag_id,
+      partitionKey: run.partition_key,
       runType: run.run_type,
       state: run.state,
       logicalDate: run.logical_date,
+      dataInterval: { start: run.data_interval_start, end: run.data_interval_end },
+      params: run.params,
+      startedAt: run.started_at,
+      finishedAt: run.finished_at,
       failureReason: run.failure_reason,
       triggeredBy: run.triggered_by,
       tasks: tasks

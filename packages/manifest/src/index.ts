@@ -40,6 +40,7 @@ export type DagManifest = {
   tags: string[];
   params: Record<string, unknown> | null;
   isPaused: boolean;
+  partitions: { key: string; label: string | null }[] | null;
   tasks: { id: string; upstream: string[]; triggerRule: string; retries: number; timeoutMs: number | null }[];
 };
 

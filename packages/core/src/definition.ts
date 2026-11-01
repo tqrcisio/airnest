@@ -23,6 +23,7 @@ export type DagDefinition = {
   startDate?: string;
   catchup: boolean;
   maxActiveRuns: number;
+  partitioned?: boolean;
   tags: string[];
   params?: Record<string, unknown>;
   tasks: TaskDefinition[];

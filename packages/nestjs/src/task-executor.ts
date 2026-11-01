@@ -76,6 +76,7 @@ export class TaskExecutor {
     const ctx: TaskContext = {
       dagId: task.dagId,
       runId: task.runId,
+      partition: task.partitionKey,
       taskId: task.taskId,
       tryNumber: task.tryNumber,
       logicalDate: task.logicalDate,

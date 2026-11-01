@@ -64,6 +64,7 @@ const entities: EntityManifest[] = [
     label: { singular: 'Run', plural: 'Runs' },
     fields: [
       { name: 'logicalDate', label: 'Logical date', kind: 'datetime', list: true, sort: true },
+      { name: 'partitionKey', label: 'Partition', kind: 'code', list: true },
       { name: 'state', label: 'State', kind: 'state', list: true, filter: 'enum', options: runStates },
       {
         name: 'runType',
@@ -147,6 +148,7 @@ export function toDagManifest(dag: DagSummary): DagManifest {
     tags: definition.tags,
     params: definition.params ?? null,
     isPaused: dag.isPaused,
+    partitions: definition.partitioned ? dag.partitions : null,
     tasks: definition.tasks.map((task) => ({
       id: task.id,
       upstream: task.upstream,

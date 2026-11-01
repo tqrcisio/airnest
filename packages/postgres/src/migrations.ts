@@ -108,6 +108,26 @@ const migrations: string[][] = [
     `alter table airnest.dag_run add column cleared_by text`,
     `alter table airnest.dag_run add column cleared_at timestamptz`,
   ],
+  [
+    `create table airnest.dag_partition (
+      dag_id text not null references airnest.dag (dag_id),
+      partition_key text not null,
+      label text,
+      is_active boolean not null default true,
+      next_run_after timestamptz,
+      last_logical_date timestamptz,
+      created_at timestamptz not null,
+      updated_at timestamptz not null,
+      primary key (dag_id, partition_key)
+    )`,
+    `create index dag_partition_due on airnest.dag_partition (next_run_after) where is_active`,
+    `insert into airnest.dag_partition (dag_id, partition_key, next_run_after, last_logical_date, created_at, updated_at)
+     select dag_id, '', next_run_after, last_logical_date, created_at, updated_at from airnest.dag`,
+    `alter table airnest.dag drop column next_run_after, drop column last_logical_date`,
+    `alter table airnest.dag_run add column partition_key text not null default ''`,
+    `alter table airnest.dag_run drop constraint dag_run_dag_id_logical_date_key`,
+    `alter table airnest.dag_run add constraint dag_run_partition_logical_date_key unique (dag_id, partition_key, logical_date)`,
+  ],
 ];
 
 export async function migrate(db: SqlClient) {

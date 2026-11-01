@@ -69,6 +69,7 @@ describe('control plane', () => {
         tags: ['sales'],
         params: salesDaily.params,
         isPaused: false,
+        partitions: null,
         tasks: [
           { id: 'extract', upstream: [], triggerRule: 'all_success', retries: 1, timeoutMs: null },
           { id: 'load', upstream: ['extract'], triggerRule: 'all_success', retries: 0, timeoutMs: null },
@@ -239,5 +240,28 @@ describe('control plane', () => {
     app = booted.app;
     await booted.http.get('/airnest/manifest').expect(403);
     await booted.http.post('/airnest/dags/sales_daily/runs').send({}).expect(403);
+  });
+
+  it('runs a partitioned DAG only for an active partition and lists its runs', async () => {
+    const booted = await boot();
+    app = booted.app;
+    const perTenant = { ...salesDaily, id: 'per_tenant', params: undefined, partitioned: true };
+    await booted.store.registerDag(perTenant, hashDag(perTenant), now);
+    await booted.store.syncPartitions('per_tenant', [{ key: 'acme', label: 'Acme' }], now);
+
+    await booted.http.post('/airnest/dags/per_tenant/runs').send({}).expect(400);
+    await booted.http.post('/airnest/dags/per_tenant/runs').send({ partition: 'globex' }).expect(400);
+    const { body: run } = await booted.http
+      .post('/airnest/dags/per_tenant/runs')
+      .send({ partition: 'acme' })
+      .expect(201);
+    expect(run.partitionKey).toBe('acme');
+
+    const { body: runs } = await booted.http.get('/airnest/dags/per_tenant/runs?partition=acme').expect(200);
+    expect(runs.map((listed: { runId: string }) => listed.runId)).toEqual([run.runId]);
+    const { body: manifest } = await booted.http.get('/airnest/manifest').expect(200);
+    expect(manifest.dags.find((dag: { id: string }) => dag.id === 'per_tenant').partitions).toEqual([
+      { key: 'acme', label: 'Acme' },
+    ]);
   });
 });

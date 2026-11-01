@@ -8,6 +8,7 @@ export type AirnestModuleOptions = {
   worker?: { enabled?: boolean; id?: string; concurrency?: number; pollMs?: number; leaseMs?: number };
   pools?: Record<string, number | { slots: number; description?: string }>;
   retention?: { days: number };
+  partitions?: { refreshMs?: number };
   enhancers?: boolean;
   shutdownTimeoutMs?: number;
   clock?: () => Date;

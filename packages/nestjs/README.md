@@ -30,4 +30,39 @@ export class SalesDailyDag {
 export class AppModule {}
 ```
 
+## Partitions
+
+When the same DAG has to run for every tenant, store or account, and that list lives in your database, mark one method
+with `@Partitions()`. Each partition gets its own runs, timetable and `maxActiveRuns`, and tasks receive the key through
+`@Partition()`.
+
+```ts
+@Dag({ id: 'catalog_sync', schedule: '0 * * * *', maxActiveRuns: 1 })
+export class CatalogSyncDag {
+  constructor(private readonly tenants: TenantRepository, private readonly importer: CatalogImporter) {}
+
+  @Partitions()
+  partitions() {
+    return this.tenants.withSyncEnabled().then((rows) => rows.map((t) => ({ key: t.id, label: t.name })));
+  }
+
+  @Task()
+  products(@Partition() tenantId: string, @DataInterval() interval: DataInterval) {
+    return this.importer.products(tenantId, interval.start);
+  }
+}
+```
+
+The scheduler calls the method once a minute (`partitions: { refreshMs }` in `forRoot`). A new key starts on the next
+fire of the schedule, a key that disappears stops being scheduled and keeps its history, and a key that comes back
+resumes from its last run. `airnest.refreshPartitions(dagId)` applies a change right away, and manual runs and
+backfills name the partition: `airnest.trigger('catalog_sync', { partition: tenantId })`. A backfill without a
+partition creates runs for every active one.
+
+## CommonJS projects
+
+The packages are ES modules. A Nest project compiled to CommonJS loads them through `require()` of ES modules, which
+Node supports without flags from 20.19 and 22.12 on, so `import { AirnestModule } from '@airnest/nestjs'` works the same
+in both kinds of project.
+
 Documentation: https://tqrcisio.github.io/airnest-docs

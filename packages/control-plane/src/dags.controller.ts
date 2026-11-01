@@ -16,12 +16,12 @@ import {
   DefaultValuePipe,
 } from '@nestjs/common';
 import { InvalidParamsError } from '@airnest/core';
-import { PostgresDagStore } from '@airnest/postgres';
+import { PostgresDagStore, UnknownPartitionError } from '@airnest/postgres';
 import { ControlPlaneGuard } from './control-plane.guard.js';
 import { CONTROL_PLANE_OPTIONS, type ControlPlaneOptions } from './control-plane.module-definition.js';
 
-type TriggerBody = { params?: unknown; logicalDate?: unknown };
-type BackfillBody = { from?: unknown; to?: unknown; params?: unknown };
+type TriggerBody = { params?: unknown; logicalDate?: unknown; partition?: unknown };
+type BackfillBody = { from?: unknown; to?: unknown; params?: unknown; partition?: unknown };
 
 const maxPageSize = 200;
 
@@ -39,16 +39,23 @@ function parseDate(value: unknown, field: string) {
   return date;
 }
 
-function parseTrigger(body: TriggerBody | undefined, now: Date) {
-  const logicalDate = body?.logicalDate === undefined ? now : parseDate(body.logicalDate, 'logicalDate');
-  return { params: parseParams(body?.params), logicalDate };
+function parsePartition(value: unknown) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new BadRequestException('partition must be a string');
+  return value;
 }
 
-async function rejectingInvalidParams<T>(work: Promise<T>) {
+function parseTrigger(body: TriggerBody | undefined, now: Date) {
+  const logicalDate = body?.logicalDate === undefined ? now : parseDate(body.logicalDate, 'logicalDate');
+  return { params: parseParams(body?.params), logicalDate, partition: parsePartition(body?.partition) };
+}
+
+async function rejectingInvalidInput<T>(work: Promise<T>) {
   try {
     return await work;
   } catch (error) {
     if (error instanceof InvalidParamsError) throw new BadRequestException(error.problems);
+    if (error instanceof UnknownPartitionError) throw new BadRequestException(error.message);
     throw error;
   }
 }
@@ -78,20 +85,25 @@ export class DagsController {
   }
 
   @Get(':dagId/runs')
-  async runs(@Param('dagId') dagId: string, @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number) {
+  async runs(
+    @Param('dagId') dagId: string,
+    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
+    @Query('partition') partition?: string,
+  ) {
     await this.get(dagId);
-    return this.store.runs(dagId, Math.min(Math.max(limit, 1), maxPageSize));
+    return this.store.runs(dagId, Math.min(Math.max(limit, 1), maxPageSize), partition);
   }
 
   @Post(':dagId/runs')
   async trigger(@Param('dagId') dagId: string, @Body() body: TriggerBody | undefined, @Req() request: unknown) {
     await this.get(dagId);
     const now = this.clock();
-    const { params, logicalDate } = parseTrigger(body, now);
-    const runId = await rejectingInvalidParams(
+    const { params, logicalDate, partition } = parseTrigger(body, now);
+    const runId = await rejectingInvalidInput(
       this.store.createRun(
         {
           dagId,
+          partitionKey: partition,
           logicalDate,
           dataInterval: { start: logicalDate, end: logicalDate },
           runType: 'manual',
@@ -115,12 +127,16 @@ export class DagsController {
     if (from > to) throw new BadRequestException('from must not be after to');
 
     try {
-      return await rejectingInvalidParams(
+      return await rejectingInvalidInput(
         this.store.createBackfill(
           dagId,
           from,
           to,
-          { params: parseParams(body?.params), triggeredBy: this.options.resolveUser?.(request) },
+          {
+            params: parseParams(body?.params),
+            triggeredBy: this.options.resolveUser?.(request),
+            partitionKey: parsePartition(body?.partition),
+          },
           this.clock(),
         ),
       );

@@ -15,6 +15,7 @@ export class AirnestRuntime implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly scheduler = new PollingLoop('scheduler', this.logger);
   private readonly worker = new PollingLoop('worker', this.logger);
   private lastPurgeAt = 0;
+  private readonly partitionsCheckedAt = new Map<string, number>();
 
   constructor(
     @Inject(AIRNEST_OPTIONS) private readonly options: AirnestModuleOptions,
@@ -32,7 +33,10 @@ export class AirnestRuntime implements OnApplicationBootstrap, OnModuleDestroy {
     for (const dag of this.registry.list()) {
       await this.store.registerDag(dag.definition, dag.hash, this.settings.clock());
     }
-    if (this.settings.scheduler.enabled) this.scheduler.start(() => this.schedule(), this.settings.scheduler.pollMs);
+    if (this.settings.scheduler.enabled) {
+      await this.refreshPartitions(this.settings.clock());
+      this.scheduler.start(() => this.schedule(), this.settings.scheduler.pollMs);
+    }
     if (this.settings.worker.enabled) this.worker.start(() => this.executor.fillSlots(), this.settings.worker.pollMs);
   }
 
@@ -61,9 +65,30 @@ export class AirnestRuntime implements OnApplicationBootstrap, OnModuleDestroy {
     if (purged > 0) this.logger.log(`Purged ${purged} runs older than ${days} days`);
   }
 
+  private async refreshPartitions(now: Date) {
+    for (const dag of this.registry.list()) {
+      if (!dag.resolvePartitions) continue;
+      const dagId = dag.definition.id;
+      const checkedAt = this.partitionsCheckedAt.get(dagId);
+      if (checkedAt !== undefined && now.getTime() - checkedAt < this.settings.partitionsRefreshMs) continue;
+      this.partitionsCheckedAt.set(dagId, now.getTime());
+      try {
+        const { activated, deactivated } = await this.store.syncPartitions(dagId, await dag.resolvePartitions(), now);
+        if (activated.length > 0) this.logger.log(`${dagId} now runs for ${activated.join(', ')}`);
+        if (deactivated.length > 0) this.logger.log(`${dagId} stopped running for ${deactivated.join(', ')}`);
+      } catch (error) {
+        this.logger.error(
+          `Could not refresh the partitions of ${dagId}; keeping the previous ones`,
+          error instanceof Error ? error.stack : error,
+        );
+      }
+    }
+  }
+
   private async schedule() {
     const now = this.settings.clock();
     await this.purgeOldRuns(now);
+    await this.refreshPartitions(now);
     const { stalled } = await this.store.createDueRuns(now);
     for (const dagId of stalled) this.logger.error(`Schedule of ${dagId} stopped moving forward; fix its cron`);
     await this.store.reapExpiredLeases(now);
