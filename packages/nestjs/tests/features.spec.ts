@@ -12,12 +12,16 @@ import {
 import { Test } from '@nestjs/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { map } from 'rxjs';
-import { PostgresDagStore } from '@airnest/postgres';
+import { PostgresDagStore, UnknownPartitionError } from '@airnest/postgres';
+import { InvalidDagError } from '@airnest/core';
 import {
   Airnest,
   AirnestModule,
+  compileDag,
   Ctx,
   Dag,
+  Partition,
+  Partitions,
   Task,
   TaskLog,
   type AirnestModuleOptions,
@@ -179,3 +183,87 @@ describe('guards and interceptors', () => {
     expect(await booted.store.outputs(runId, ['extract'])).toEqual({ extract: 21 });
   });
 });
+
+@Injectable()
+class Tenants {
+  keys = [
+    { key: 'acme', label: 'Acme' },
+    { key: 'globex', label: 'Globex' },
+  ];
+}
+
+@Dag({ id: 'per_tenant', schedule: '0 * * * *', startDate: new Date(Date.now() - 60 * 60_000), maxActiveRuns: 1 })
+class PerTenantDag {
+  constructor(private readonly tenants: Tenants) {}
+
+  @Partitions()
+  partitions() {
+    return this.tenants.keys;
+  }
+
+  @Task()
+  extract(@Partition() tenant: string) {
+    return `${tenant} extracted`;
+  }
+}
+
+describe('partitioned DAGs', () => {
+  it('runs once per partition and hands the partition to each task', async () => {
+    const { app, store } = await boot({}, Tenants, PerTenantDag);
+    const runs = await waitForRuns(app, 'per_tenant', 2);
+    expect(runs.map((run) => [run.partitionKey, run.state]).sort()).toEqual([
+      ['acme', 'success'],
+      ['globex', 'success'],
+    ]);
+    const outputs = await Promise.all(runs.map((run) => store.outputs(run.runId, ['extract'])));
+    expect(outputs.map((output) => output.extract).sort()).toEqual(['acme extracted', 'globex extracted']);
+    await app.close();
+  });
+
+  it('requires a partition to trigger a partitioned DAG', async () => {
+    const { app } = await boot({ scheduler: { enabled: true, pollMs: 10 } }, Tenants, PerTenantDag);
+    const airnest = app.get(Airnest);
+    await expect(airnest.trigger('per_tenant')).rejects.toBeInstanceOf(UnknownPartitionError);
+    expect(await airnest.trigger('per_tenant', { partition: 'acme', logicalDate: new Date(0) })).toEqual(
+      expect.any(String),
+    );
+    await app.close();
+  });
+
+  it('picks up a new partition on demand without waiting for the refresh interval', async () => {
+    const { app } = await boot({ scheduler: { enabled: true, pollMs: 10 } }, Tenants, PerTenantDag);
+    app.get(Tenants).keys.push({ key: 'initech', label: 'Initech' });
+    expect(await app.get(Airnest).refreshPartitions('per_tenant')).toEqual({ activated: ['initech'], deactivated: [] });
+    expect((await app.get(Airnest).partitions('per_tenant')).map((partition) => partition.key)).toContain('initech');
+    await app.close();
+  });
+
+  it('refuses a DAG that declares partitions twice', () => {
+    @Dag({ id: 'twice' })
+    class TwiceDag {
+      @Partitions()
+      a() {
+        return ['x'];
+      }
+
+      @Partitions()
+      b() {
+        return ['y'];
+      }
+
+      @Task()
+      extract() {}
+    }
+    const instance = new TwiceDag();
+    expect(() => compileDag({ id: 'twice' }, instance, ['a', 'b', 'extract'])).toThrow(InvalidDagError);
+  });
+});
+
+async function waitForRuns(app: INestApplicationContext, dagId: string, count: number) {
+  for (let waited = 0; waited < 10_000; waited += 20) {
+    const runs = await app.get(Airnest).runs(dagId, 50);
+    if (runs.length >= count && runs.every((run) => run.state === 'success' || run.state === 'failed')) return runs;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`${dagId} did not finish ${count} runs`);
+}

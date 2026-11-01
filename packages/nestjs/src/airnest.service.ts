@@ -1,20 +1,25 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { PostgresDagStore, type BackfillOptions, type ClearOptions } from '@airnest/postgres';
+import { PostgresDagStore, type ClearOptions } from '@airnest/postgres';
 import { AIRNEST_OPTIONS, type AirnestModuleOptions } from './airnest.module-definition.js';
+import { DagRegistry } from './dag.registry.js';
 import { resolveSettings } from './settings.js';
 
 export type TriggerOptions = {
   params?: Record<string, unknown>;
   triggeredBy?: string;
   logicalDate?: Date;
+  partition?: string;
 };
+
+export type BackfillOptions = { params?: Record<string, unknown>; triggeredBy?: string; partition?: string };
 
 export class RunAlreadyExistsError extends Error {
   constructor(
     readonly dagId: string,
     readonly logicalDate: Date,
+    readonly partition = '',
   ) {
-    super(`DAG ${dagId} already has a run for ${logicalDate.toISOString()}`);
+    super(`DAG ${dagId}${partition ? ` [${partition}]` : ''} already has a run for ${logicalDate.toISOString()}`);
   }
 }
 
@@ -25,6 +30,7 @@ export class Airnest {
   constructor(
     @Inject(AIRNEST_OPTIONS) options: AirnestModuleOptions,
     private readonly store: PostgresDagStore,
+    private readonly registry: DagRegistry,
   ) {
     this.clock = resolveSettings(options).clock;
   }
@@ -35,6 +41,7 @@ export class Airnest {
     const runId = await this.store.createRun(
       {
         dagId,
+        partitionKey: options.partition,
         logicalDate,
         dataInterval: { start: logicalDate, end: logicalDate },
         runType: 'manual',
@@ -43,7 +50,7 @@ export class Airnest {
       },
       now,
     );
-    if (!runId) throw new RunAlreadyExistsError(dagId, logicalDate);
+    if (!runId) throw new RunAlreadyExistsError(dagId, logicalDate, options.partition);
     return runId;
   }
 
@@ -53,11 +60,41 @@ export class Airnest {
     return cleared;
   }
 
-  backfill(dagId: string, range: { from: Date; to: Date }, options: BackfillOptions = {}) {
-    return this.store.createBackfill(dagId, range.from, range.to, options, this.clock());
+  backfill(dagId: string, range: { from: Date; to: Date }, { partition, ...options }: BackfillOptions = {}) {
+    return this.store.createBackfill(
+      dagId,
+      range.from,
+      range.to,
+      { ...options, partitionKey: partition },
+      this.clock(),
+    );
   }
 
-  runs(dagId: string, limit?: number) {
-    return this.store.runs(dagId, limit);
+  runs(dagId: string, limit?: number, partition?: string) {
+    return this.store.runs(dagId, limit, partition);
+  }
+
+  run(runId: string) {
+    return this.store.run(runId);
+  }
+
+  async outputs(runId: string) {
+    const run = await this.store.run(runId);
+    return run
+      ? this.store.outputs(
+          runId,
+          run.tasks.map((task) => task.taskId),
+        )
+      : {};
+  }
+
+  partitions(dagId: string) {
+    return this.store.partitions(dagId);
+  }
+
+  async refreshPartitions(dagId: string) {
+    const { resolvePartitions } = this.registry.get(dagId);
+    if (!resolvePartitions) throw new Error(`DAG ${dagId} is not partitioned`);
+    return this.store.syncPartitions(dagId, await resolvePartitions(), this.clock());
   }
 }

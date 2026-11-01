@@ -8,6 +8,7 @@ export function resolveSettings(options: AirnestModuleOptions) {
     shutdownTimeoutMs: options.shutdownTimeoutMs ?? 30_000,
     pools: options.pools ?? {},
     retentionDays: options.retention?.days,
+    partitionsRefreshMs: options.partitions?.refreshMs ?? 60_000,
     enhancers: options.enhancers ?? false,
     scheduler: { enabled: options.scheduler?.enabled ?? true, pollMs: options.scheduler?.pollMs ?? 1000 },
     worker: {

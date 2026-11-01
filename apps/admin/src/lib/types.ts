@@ -26,6 +26,7 @@ export type Dag = {
   nextRunAfter: string | null;
   lastLogicalDate: string | null;
   lastRunState: RunState | null;
+  partitions: { key: string; label: string | null }[];
 };
 
 export type TaskInstance = {
@@ -39,6 +40,7 @@ export type TaskInstance = {
 export type Run = {
   runId: string;
   dagId: string;
+  partitionKey: string;
   runType: 'scheduled' | 'manual' | 'backfill';
   state: RunState;
   logicalDate: string;

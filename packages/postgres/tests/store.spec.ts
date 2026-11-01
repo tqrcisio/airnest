@@ -16,7 +16,7 @@ describe('PostgresDagStore', () => {
     const { db } = await storeWith();
     await migrate(db);
     const { rows } = await db.query<{ version: number }>('select version from airnest.migration');
-    expect(rows).toEqual([{ version: 1 }, { version: 2 }]);
+    expect(rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
   });
 
   it('creates one run per logical date', async () => {

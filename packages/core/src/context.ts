@@ -9,6 +9,7 @@ export type TaskLogger = {
 export type TaskContext = {
   dagId: string;
   runId: string;
+  partition: string;
   taskId: string;
   tryNumber: number;
   logicalDate: Date;

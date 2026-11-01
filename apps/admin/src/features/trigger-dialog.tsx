@@ -10,17 +10,16 @@ import { Textarea } from '@airnest/ui/components/textarea';
 import { useDagActions } from '@/lib/queries';
 import type { DagManifest } from '@/lib/types';
 import { InvalidParam, paramFields, toParams, type ParamField } from './params-form';
+import { PartitionSelect, selectClass } from './partition-select';
 
 type TriggerDialogProps = { dag: DagManifest; open: boolean; onOpenChange: (open: boolean) => void };
-
-const selectClass =
-  'h-9 w-full rounded-3xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50';
 
 export function TriggerDialog({ dag, open, onOpenChange }: TriggerDialogProps) {
   const fields = paramFields(dag.params);
   const { trigger } = useDagActions(dag.id);
   const navigate = useNavigate();
   const [fieldError, setFieldError] = useState<InvalidParam | null>(null);
+  const [partition, setPartition] = useState('');
   const form = useForm<Record<string, string | boolean>>({
     defaultValues: Object.fromEntries(fields.map((field) => [field.name, field.initial])),
   });
@@ -34,7 +33,7 @@ export function TriggerDialog({ dag, open, onOpenChange }: TriggerDialogProps) {
       if (error instanceof InvalidParam) return setFieldError(error);
       throw error;
     }
-    const run = await trigger.mutateAsync(params);
+    const run = await trigger.mutateAsync({ params, partition: dag.partitions ? partition : undefined });
     onOpenChange(false);
     await navigate({ to: '/dags/$dagId/runs/$runId', params: { dagId: dag.id, runId: run.runId } });
   });
@@ -87,6 +86,17 @@ export function TriggerDialog({ dag, open, onOpenChange }: TriggerDialogProps) {
           <DialogTitle>Trigger {dag.id}</DialogTitle>
         </DialogHeader>
         <form id="trigger-form" onSubmit={submit}>
+          {dag.partitions && (
+            <Field className="mb-4">
+              <FieldLabel htmlFor="trigger-partition">Partition</FieldLabel>
+              <PartitionSelect
+                id="trigger-partition"
+                partitions={dag.partitions}
+                value={partition}
+                onChange={setPartition}
+              />
+            </Field>
+          )}
           {fields.length === 0 ? (
             <p className="text-sm text-muted-foreground">This DAG takes no parameters.</p>
           ) : (

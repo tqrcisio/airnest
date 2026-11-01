@@ -40,8 +40,8 @@ export function useDagActions(dagId: string) {
     ]);
 
   const trigger = useMutation({
-    mutationFn: (params: Record<string, unknown>) =>
-      api<Run>(`/dags/${dagId}/runs`, { method: 'POST', body: JSON.stringify({ params }) }),
+    mutationFn: ({ params, partition }: { params: Record<string, unknown>; partition?: string }) =>
+      api<Run>(`/dags/${dagId}/runs`, { method: 'POST', body: JSON.stringify({ params, partition }) }),
     onSuccess: refresh,
   });
   const pause = useMutation({
@@ -78,7 +78,7 @@ export function useRunActions(runId: string) {
 export function useBackfill(dagId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (range: { from: string; to: string }) =>
+    mutationFn: (range: { from: string; to: string; partition?: string }) =>
       api<{ created: string[]; skipped: number }>(`/dags/${dagId}/backfills`, {
         method: 'POST',
         body: JSON.stringify(range),

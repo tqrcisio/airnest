@@ -4,6 +4,7 @@ export function taskContext(overrides: Partial<TaskContext> = {}): TaskContext {
   return {
     dagId: 'sales_daily',
     runId: 'run-1',
+    partition: '',
     taskId: 'extract',
     tryNumber: 1,
     logicalDate: new Date('2026-10-06T06:00:00Z'),
