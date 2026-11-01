@@ -38,7 +38,7 @@ export function nextScheduledRun(
   let next: Date | null;
   if (lastLogicalDate) next = cron.nextRun(lastLogicalDate);
   else if (dag.startDate) next = firstFireAtOrAfter(cron, new Date(dag.startDate));
-  else next = cron.nextRun(now);
+  else next = latestFireAtOrBefore(cron, now) ?? cron.nextRun(now);
   if (!next) return null;
 
   if (!dag.catchup) {

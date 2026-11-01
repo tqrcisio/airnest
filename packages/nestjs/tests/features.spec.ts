@@ -192,7 +192,7 @@ class Tenants {
   ];
 }
 
-@Dag({ id: 'per_tenant', schedule: '0 * * * *', startDate: new Date(Date.now() - 60 * 60_000), maxActiveRuns: 1 })
+@Dag({ id: 'per_tenant', schedule: '0 * * * *', maxActiveRuns: 1 })
 class PerTenantDag {
   constructor(private readonly tenants: Tenants) {}
 

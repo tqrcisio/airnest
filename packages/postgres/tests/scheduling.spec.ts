@@ -47,6 +47,14 @@ describe('createDueRuns', () => {
     expect(report.created.map((run) => run.logicalDate.toISOString())).toEqual(['2026-10-06T07:00:00.000Z']);
   });
 
+  it('runs a DAG without startDate at the fire that just came due instead of skipping it', async () => {
+    const hourly = { ...dag('hourly', task('extract')), schedule: { cron: '0 * * * *', timezone: 'UTC' } };
+    const { store } = await storeWith(hourly);
+    const report = await store.createDueRuns(clock.after(30_000));
+    expect(report.created.map((run) => run.logicalDate.toISOString())).toEqual(['2026-10-06T06:00:00.000Z']);
+    expect((await store.createDueRuns(clock.after(30 * 60_000))).created).toEqual([]);
+  });
+
   it('never schedules a DAG without a cron', async () => {
     const { store } = await storeWith(dag('manual_only', task('extract')));
     expect(await store.createDueRuns(clock.after(365 * 86_400_000))).toEqual({ created: [], stalled: [] });
