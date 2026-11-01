@@ -1,6 +1,6 @@
 {
   "name": "@airnest/nestjs",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Airflow-style DAGs for NestJS: declare DAGs with @Dag and @Task, scheduled and run by your app",
   "keywords": [
     "nestjs",
