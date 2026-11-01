@@ -35,6 +35,14 @@ describe('nextScheduledRun', () => {
   it('has nothing to schedule for a manual-only DAG', () => {
     expect(nextScheduledRun({ ...daily, schedule: null }, null, new Date())).toBeNull();
   });
+
+  it('starts at the latest fire that is already due when there is no startDate', () => {
+    const withoutStart = { ...daily, startDate: undefined, catchup: false };
+    const first = nextScheduledRun(withoutStart, null, at('2026-10-06T12:00:30Z'))!;
+    expect(first.logicalDate).toEqual(at('2026-10-06T06:00:00Z'));
+    const second = nextScheduledRun(withoutStart, first.logicalDate, at('2026-10-06T12:00:30Z'))!;
+    expect(second.logicalDate).toEqual(at('2026-10-07T06:00:00Z'));
+  });
 });
 
 describe('scheduledRunsBetween', () => {
