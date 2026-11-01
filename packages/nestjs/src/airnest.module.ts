@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 import { PostgresDagStore } from '@airnest/postgres';
 import { AIRNEST_OPTIONS, ConfigurableModuleClass, type AirnestModuleOptions } from './airnest.module-definition.js';
@@ -8,6 +8,7 @@ import { DagExplorer } from './dag.explorer.js';
 import { DagRegistry } from './dag.registry.js';
 import { TaskExecutor } from './task-executor.js';
 
+@Global()
 @Module({
   imports: [DiscoveryModule],
   providers: [
